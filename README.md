@@ -1,7 +1,7 @@
 # open-spatial-grounding
 Out of the box open source package for grounding open vocabulary objects with spatial constraints in 3D maps.
-![Splash](assets/images/teaser.gif?raw=true)
 
+![Splash](assets/images/splash.gif?raw=true)
 
 ## Citation
 
