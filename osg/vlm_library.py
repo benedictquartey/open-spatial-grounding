@@ -413,6 +413,11 @@ class vlm_library():
                                         print(f"         Center pixel depth empty,obtained new pixel from mask || pixel:{center_pixel}, depth: {mask_depth}")
                                         break
 
+                              # Skip monocular model and just move on to next mask if no sensor depth 
+                              if successful_pixel == False:
+                                   print("         Not using depth model, moving on to next mask")
+                                   continue
+
                          print(f"         Mask {labels[i]}_{str(node_idx)}{obs_idx_to_alphabet[obs_idx]}_{i} || Chosen Center pixel: {center_pixel} || Average mask depth: {average_depth} || Chosen Mask depth: {mask_depth}")
 
                          mask_label =  labels[i]
@@ -441,13 +446,14 @@ class vlm_library():
                                                        "origin_nodedepthimg":depth_data,
                                                        "origin_nodepose":observation_graph.nodes[node_idx]['pose'][obs_idx],
                                                        "worldframe_3d_position":transformed_point if bad_point==False else None
-                                                       })
+                                                       })        
                     self.grounded_elements.extend(tracking_ids)
+              
                     if visualize: 
                          # save anotated images to tmp folder
                          file_name = f"observation_{node_idx}_{obs_idx_to_alphabet[obs_idx]}.png"
                          annotated = self.plot_boxes(observation_graph.nodes[node_idx]['rgb'][obs_idx], bounds, labels, confidence,plt_size=8,file_name=file_name) #visualize grounding results
-
+                    
           return node_element_details
 
  

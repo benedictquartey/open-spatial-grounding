@@ -16,9 +16,9 @@ Out of the box open source package for grounding open vocabulary objects with sp
 * Walkthrough the [demo notebook](demo_notebook.ipynb)
 * Run the [demo_visualize_results.py](demo_visualize_results.py) to visualize results
   * To visualize grounded detections after spatial grounding run :\
- ```demo_visualize_results.py --result_dir results --show_elements --remove_roof --show_origin```
+ ```python demo_visualize_results.py --result_dir results --show_elements --remove_roof --show_origin```
   * To visualize Referent Semantic Map run:\
-```demo_visualize_results.py --result_dir results --show_elements --rsm --remove_roof```
+```python demo_visualize_results.py --result_dir results --rsm --remove_roof```
 
 ## Citation
 
