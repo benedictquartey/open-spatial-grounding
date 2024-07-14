@@ -11,6 +11,14 @@ Out of the box open source package for grounding open vocabulary objects with sp
   * Segment Anything: ```pip install git+https://github.com/facebookresearch/segment-anything.git```
 * Get SAM or Mobile Sam model checkpoints and place it in the [model_ckpts](osg/model_ckpts/) folder
 
+## Record 3D Data
+* Install PolyCam
+* Enable Developer Mode
+* Use Lidar mode to capture about 30 images of scene, 
+  * You can process on device but for better performance and in more complex scenes choose cloud processing.
+* Export raw capture data to your computer
+* Run ```python``` to convert data
+
 ## Running Instructions
 * Grab sample data from [drive](https://)
 * Walkthrough the [demo notebook](demo_notebook.ipynb)

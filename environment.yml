@@ -2,10 +2,10 @@ name: osg  # Name of your conda environment
 channels:
   - defaults
 dependencies:
-  - python=3.9  # Specify the Python version
-  - numpy       
-  - pip         
+  - python=3.9  # Specify the Python version  
+  - pip       
   - pip:
+      - numpy
       - open3d   
       - networkx 
       - pillow
@@ -16,3 +16,7 @@ dependencies:
       - tqdm
       - ipykernel
       - timm==0.9.10
+      - fire
+      - more_itertools
+      - opencv-python==4.9.0.80
+      - pyliblzfse
