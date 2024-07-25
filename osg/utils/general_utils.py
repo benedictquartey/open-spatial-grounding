@@ -4,6 +4,17 @@ import pickle
 from PIL import Image
 from os import path, makedirs
 import networkx as nx
+import random
+import string
+from osg.utils.record3d_utils import get_posed_rgbd_dataset, get_pointcloud
+from torchvision.transforms import ToPILImage
+import matplotlib.pyplot as plt
+
+#function to generate random numeric alphanumeric string
+def random_string(string_length=20):
+    letters = string.ascii_lowercase
+    return ''.join(random.choice(letters) for i in range(string_length))
+
 
 def get_spatial_referents(encoding_map):
     referent_spatial_details = parse_spatial_relations(encoding_map)
@@ -165,7 +176,68 @@ def pixel_to_world_frame(i,j,pixel_depth,rotation_matrix,position):
     transformed_xyz = np.matmul(rotation_matrix,camera2hand) + position  
     return(transformed_xyz,bad_z)
 
-def load_data(data_path,tmp_fldr):
+def decompose_pose_batch(pose):
+    """Decomposes a 4x4 homogeneous transformation pose matrix into position and rotation components.
+
+    Args:
+        pose: The pose array, with shape (B, 4, 4)
+
+    Returns:
+        position: The translation vector, with shape (B, 3)
+        rotation: The rotation matrix, with shape (B, 3, 3)
+    """
+    position = pose[:, :3, 3]
+    rotation = pose[:, :3, :3]
+    return position, rotation
+
+def decompose_pose_single(pose):
+    """Decomposes a single 4x4 homogeneous transformation pose matrix into position and rotation components.
+
+    Args:
+        pose: The pose matrix, with shape (4, 4)
+
+    Returns:
+        position: The translation vector, with shape (3)
+        rotation: The rotation matrix, with shape (3, 3)
+    """
+    position = pose[:3, 3]
+    rotation = pose[:3, :3]
+    return position, rotation
+
+def load_r3d_data(data_file,tmp_fldr,depth_confidence_cutoff=0.7, pcd_downsample=False):
+    if not path.exists(tmp_fldr):
+        makedirs(tmp_fldr)
+    observation_data = {'image_data':{},
+    'depth_data':{},
+    'pose_data':{}}
+
+    posed_dataset = get_posed_rgbd_dataset(key="r3d", path=data_file)
+    #load pointcloud
+
+    if path.exists(f"{tmp_fldr}/pointcloud.pcd"):
+        print("loading pointcloud already on disk...")
+        env_pointcloud = o3d.io.read_point_cloud(f"{tmp_fldr}/pointcloud.pcd")
+    else:
+        print("generating scene pointcloud...")
+        env_pointcloud = get_pointcloud(posed_dataset, threshold=depth_confidence_cutoff, downsample=pcd_downsample)
+        #do not save pointcloud if already exists
+        print("saving pointcloud to disk...")
+        o3d.io.write_point_cloud(f"{tmp_fldr}/pointcloud.pcd", env_pointcloud)
+        print("")
+    for idx, pose in enumerate(posed_dataset.poses):
+        waypoint_name = random_string()
+        print(f"{idx+1} out of {len(posed_dataset.poses)} || Getting rgbd data for waypoint:{waypoint_name}")
+        observation_data['image_data'][waypoint_name] = posed_dataset[idx].image
+        observation_data['pose_data'][waypoint_name] = {}
+        position, rotation_matrix = decompose_pose_single(posed_dataset[idx].pose)
+        observation_data['pose_data'][waypoint_name]['pose_matrix'] = posed_dataset[idx].pose
+        observation_data['pose_data'][waypoint_name]['position'] = position
+        observation_data['pose_data'][waypoint_name]['rotation_matrix'] = rotation_matrix
+        observation_data['depth_data'][waypoint_name] = posed_dataset[idx].depth
+
+    return posed_dataset, observation_data, env_pointcloud
+
+def load_robot_data(data_path,tmp_fldr):
     """
     This function loads the data from the data_path and returns the observation data and edge connectivity data.
 
@@ -224,7 +296,35 @@ def load_data(data_path,tmp_fldr):
 
     return observation_data, edge_connectivity, env_pointcloud
 
-def create_observation_graph(observation_data,edge_connectivity,tmp_fldr=None):
+def create_r3d_observation_graph(observation_data,tmp_fldr=None):
+    """
+    This function creates the observation graph from the observation data and edge connectivity data.
+
+    Parameters:
+        observation_data (dict): The observation data dictionary.
+        edge_connectivity (dict): The edge connectivity dictionary.
+
+    Returns:
+        observations_graph (nx.Graph): The observation graph.
+    """
+    observations_graph = nx.Graph()
+    node_coords = {}
+    to_pil = ToPILImage()
+
+    for i,node_key in enumerate(observation_data['image_data'].keys()):
+        # print(f"Adding node {i} with key {node_key} to graph")
+        node_image = to_pil(observation_data['image_data'][node_key])
+        node_depth = observation_data['depth_data'][node_key]
+        node_pose = observation_data['pose_data'][node_key]
+        coord = tuple(node_pose['position'][0:2]) #x,y axis from position
+        observations_graph.add_node(node_for_adding=i, rgb=node_image, depth_data=node_depth, pose=node_pose, waypoint_key=node_key, xy_coordinate=coord)
+        node_coords[i]=coord
+    #save waypoint info to disk
+
+    np.save(tmp_fldr+f'waypoints.npy', observation_data['pose_data'])
+    return observations_graph,node_coords
+
+def create_robot_observation_graph(observation_data,edge_connectivity,tmp_fldr=None):
     """
     This function creates the observation graph from the observation data and edge connectivity data.
 
@@ -276,17 +376,8 @@ def create_observation_graph(observation_data,edge_connectivity,tmp_fldr=None):
             # print(f"Waypoint id: {str(origin_node_id):2s} || name: {waypoint_name:40s} connected to: Waypoint id: {str(connected_node_id):2s} || name: {connected_waypoint[0]:40s} with cost: {connected_waypoint[1]}")
             observations_graph.add_edge(origin_node_id, connected_node_id, distance=rounded)
 
-    
     #save waypoint info to disk
-    #create tmp_fldr folder if it doesn't exist
-    if tmp_fldr != None:
-        if not path.exists(tmp_fldr):
-            makedirs(tmp_fldr)
-
-        np.save(tmp_fldr+f'waypoints.npy', observation_data['rep_pose'])
-    else:
-        np.save(f'waypoints.npy', observation_data['rep_pose'])
-
+    np.save(tmp_fldr+f'waypoints.npy', observation_data['rep_pose'])
     return observations_graph, node_id2key, node_key2id, node_coords
 
 #function to compute rotation matrix from quaternion
@@ -302,3 +393,57 @@ def rotation_matrix_from_quaternion(quaternion):
                [2 * x * y + 2 * w * z, 1 - 2 * x ** 2 - 2 * z ** 2, 2 * y * z - 2 * w * x],
                [2 * x * z - 2 * w * y, 2 * y * z + 2 * w * x, 1 - 2 * x ** 2 - 2 * y ** 2]])
    return R
+
+
+def draw_observations_graph(observations_graph, node_coords, plt_size=(20,20),axis=False):
+    """
+    This function draws the observation graph.
+
+    Parameters:
+        observations_graph (nx.Graph): The observation graph.
+        node_coords (dict): The node id to node coordinate dictionary.  
+        plt_size (tuple): The size of the plot.
+        axis (bool): Whether to draw the graph with axis or not.
+
+    Returns:
+        None
+    """
+    options = {
+        "font_size": 10,
+        "node_size": 1000,
+        "node_color": "white",
+        "edgecolors": "grey",
+        "linewidths": 3,
+        "width": 2,
+        "edge_color": "black",
+    }
+    
+    if axis == False:
+        #Draw graph without axis
+        plt.figure(figsize=plt_size)
+        nx.draw_networkx(observations_graph,pos=node_coords, **options)
+
+        # draw edge weights
+        labels = nx.get_edge_attributes(observations_graph, 'distance')
+        nx.draw_networkx_edge_labels(observations_graph, pos=node_coords, edge_labels=labels,font_size=options['font_size'])
+
+        # Set margins for the axes so that nodes aren't clipped
+        ax = plt.gca()
+        ax.margins(0.1)
+        plt.axis("off")
+        plt.show()
+
+    elif axis == True:
+        #Draw graph with axis
+        fig, ax = plt.subplots(figsize=plt_size)
+        nx.draw(observations_graph, pos=node_coords, node_color='k', ax=ax)
+        nx.draw(observations_graph, pos=node_coords, node_size=1500, ax=ax)  # draw nodes and edges
+        nx.draw_networkx_labels(observations_graph, pos=node_coords)  # draw node labels/names
+
+        # draw edge weights
+        labels = nx.get_edge_attributes(observations_graph, 'distance')
+        nx.draw_networkx_edge_labels(observations_graph, pos=node_coords, edge_labels=labels, ax=ax)
+
+        ax.tick_params(left=True, bottom=True, labelleft=True, labelbottom=True)
+        plt.axis("on")
+        plt.show()

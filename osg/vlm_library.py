@@ -15,11 +15,11 @@ from transformers import OwlViTProcessor, OwlViTForObjectDetection, Owlv2Process
 
 from osg.spatial_relationships import check_spatial_predicate_satisfaction
 from osg.utils.general_utils import get_center_pixel_depth, get_mask_pixels_depth, get_bounding_box_center_depth, get_bounding_box_pixels_depth, pixel_to_world_frame
-
 # import warnings
 # warnings.filterwarnings("ignore")
 class vlm_library():
-     def __init__(self, vl_model, seg_model="sam",tmp_fldr="./tmp"):
+     def __init__(self, vl_model, data_src="robot", seg_model="sam",tmp_fldr="./tmp"):
+          self.data_sources = ["robot","r3d"]
           self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
           self.vl_model_name = vl_model
           self.seg_model = None
@@ -38,7 +38,7 @@ class vlm_library():
           else:
                raise ValueError("Invalid model name")
           
-          print(f"\nVisual language model: {self.vl_model_name}\n-------------------------------------------------")
+          print(f"-------------------------------------------------\nVisual language model: {self.vl_model_name}\n-------------------------------------------------")
      
           if seg_model == "sam":
                module_path = os.path.dirname(__file__)
@@ -53,6 +53,12 @@ class vlm_library():
                print(f"Segmentation model: Mobile SAM\n-------------------------------------------------")
           else:
                raise ValueError("Invalid segmentation model name")
+          
+          if data_src not in self.data_sources:
+               raise ValueError("Invalid data source")
+          else:
+               self.data_src = data_src
+               print(f"Data source: {self.data_src}\n-------------------------------------------------")
 
      def load_owl_vit(self, model_name="google/owlvit-base-patch32"):
           model = OwlViTForObjectDetection.from_pretrained(model_name)
@@ -342,11 +348,12 @@ class vlm_library():
           print(f"Worker {job_id} || Time taken: {time_end-time_init} seconds")
           sys.stdout.close()
 
-     def process_node(self, node_idx ,observation_graph,propositions,visualize, use_segmentation=True): 
+
+     def process_node_robot(self, node_idx ,observation_graph, propositions, visualize, use_segmentation=True):
           node_element_details = []   
-          obs_idx_to_alphabet = {0:"a",1:"b",2:"c",3:"d"}
           print(f"Evaluating Waypoint at Node {node_idx}")
           observation_graph.nodes[node_idx]['annotated_img']={}
+          obs_idx_to_alphabet = {0:"a",1:"b",2:"c",3:"d"}
            #label for each picture at that node (left, right, front and back)
           for obs_idx in range(4):
                print(f"   Observation_{obs_idx}...")
@@ -456,4 +463,122 @@ class vlm_library():
                     
           return node_element_details
 
- 
+     def process_node(self, node_idx ,observation_graph,propositions,visualize, use_segmentation=True): 
+          if self.data_src == "robot":
+               print(f"-------------------------------------------------\nProcessing Robot Data\n-------------------------------------------------")
+               return self.process_node_robot(node_idx, observation_graph, propositions, visualize, use_segmentation)
+          elif self.data_src == "r3d":
+               print(f"-------------------------------------------------\nProcessing Record3D Data\n-------------------------------------------------")
+               return self.process_node_r3d(node_idx, observation_graph, propositions, visualize, use_segmentation)
+
+     def process_node_r3d(self, node_idx ,observation_graph,propositions,visualize, use_segmentation=True): 
+          node_element_details = []   
+          print(f"Evaluating Waypoint at Node {node_idx}")
+          observation_graph.nodes[node_idx]['annotated_img']={}
+          bounds,labels,confidence = self.label_observation(observation_graph.nodes[node_idx]['rgb'],propositions,threshold=0.1)
+
+          present_propositions = list(set(labels))
+          tracking_ids=[]
+          # print(f"Elements in observation: {present_propositions}")
+     
+          #Check if detected labels/propositions at observation node havent already been segmented and masks obtained 
+          if not all(element in self.grounded_elements for element in present_propositions):
+               if use_segmentation:
+                    print(f"      Detected Task relevant elements: {present_propositions} || Segmenting to obtain masks ...")
+                    # segment for masks of each proposition
+                    masks,sam_embedding=self.segment(observation_graph.nodes[node_idx]['rgb'],bounds)
+               else:
+                    print(f"      Detected Task relevant elements: {present_propositions} || Using bounding boxes as masks ...")
+                    masks = bounds
+                    sam_embedding=None
+
+               #get depth info
+               try :
+                    depth_data = observation_graph.nodes[node_idx]['depth_data']
+                    print(f"      Loaded depth data from waypoint node {node_idx}, ")
+               except:
+                    print(f"      No existing depth data || Estimating depth image...")
+                    depth_img,depth_data = self.estimate_depth(observation_graph.nodes[node_idx]['rgb'])
+
+               #get mask info
+               for i,mask in enumerate(masks):
+                    print(f"      Processing {labels[i]} mask")
+                    if use_segmentation:
+                         actual_mask = mask[0].cpu()
+                         center_pixel, center_pixel_depth = get_center_pixel_depth(actual_mask,depth_data)
+                         mask_pixel_coords,pixel_depths,average_depth=get_mask_pixels_depth(actual_mask,depth_data)
+                    else:
+                         actual_mask = mask
+                         center_pixel, center_pixel_depth = get_bounding_box_center_depth(actual_mask,depth_data)
+                         mask_pixel_coords,pixel_depths,average_depth=get_bounding_box_pixels_depth(actual_mask,depth_data)
+                    
+                    print(f"         Mask {labels[i]}_{str(node_idx)}_{i} || Original Center pixel: {center_pixel} || Center pixel depth: {center_pixel_depth}")
+                    center_pixel_depth=average_depth #Use average of mask depth with actual values as depth of center pixel || not just the actual center pixel depth
+                    
+                    ##Three step adaptive depth data approach 
+                    mask_depth=0.0
+                    if center_pixel_depth != 0.0:
+                         mask_depth=center_pixel_depth
+                    if center_pixel_depth == 0.0:
+                         successful_pixel = False
+                         #Try to get closest pixel to center pixel in mask, that has a depth
+                         # Create a list of tuples with pixel indices, depth, and distance from center pixel
+                         pixel_data = [(idx, depth, ((coord[0] - center_pixel[0])**2 + (coord[1] - center_pixel[1])**2)**0.5)
+                                        for idx, (depth, coord) in enumerate(zip(pixel_depths, mask_pixel_coords))]
+
+                         # Sort the pixel data list based on the distance from center pixel
+                         sorted_pixel_data = sorted(pixel_data, key=lambda x: x[2])
+
+                         # Iterate over the sorted pixel data list
+                         for idx, depth, distance in sorted_pixel_data:
+                              if depth != 0.0:
+                                   mask_depth = depth
+                                   center_pixel = mask_pixel_coords[idx]
+                                   successful_pixel = True
+                                   print(f"         Center pixel depth empty,obtained new pixel from mask || pixel:{center_pixel}, depth: {mask_depth}")
+                                   break
+
+                         # Skip monocular model and just move on to next mask if no sensor depth 
+                         if successful_pixel == False:
+                              print("         Not using depth model, moving on to next mask")
+                              continue
+
+                    print(f"         Mask {labels[i]}_{str(node_idx)}_{i} || Chosen Center pixel: {center_pixel} || Average mask depth: {average_depth} || Chosen Mask depth: {mask_depth}")
+
+                    mask_label =  labels[i]
+                    tracking_id = labels[i]+"_"+str(node_idx)+"_"+str(i)
+                    tracking_ids.append(tracking_id)
+                    if tracking_id not in self.grounded_elements: #only record new masks
+                         #get worldframe backprojected 3d position of object(center pixel)
+                         print(f"         Backprojectig 3D ray using pixel: {center_pixel} & depth: {mask_depth}m for {tracking_id}...")
+                         center_y, center_x = center_pixel
+                         pixel_depth = mask_depth
+                         rotation_matrix = observation_graph.nodes[node_idx]['pose']['rotation_matrix']
+                         position = observation_graph.nodes[node_idx]['pose']['position']
+                         transformed_point,bad_point = pixel_to_world_frame(center_y,center_x,pixel_depth,rotation_matrix,position)
+                         print(f"         Recording mask info for {tracking_id}...")
+                         node_element_details.append({"mask_label":mask_label,
+                                                  "mask_id":tracking_id,
+                                                  "origin_obsnode":node_idx,
+                                                  "mask":actual_mask.cpu() if torch.is_tensor(actual_mask) else actual_mask,
+                                                  "mask_center_pixel":center_pixel,
+                                                  "mask_center_pixel_depth":center_pixel_depth,
+                                                  "mask_all_pixels":mask_pixel_coords,
+                                                  "mask_all_pixels_depth":pixel_depths,
+                                                  "mask_depth":mask_depth,
+                                                  "sam_embedding":sam_embedding.cpu() if torch.is_tensor(sam_embedding) else sam_embedding,
+                                                  "origin_nodeimg":observation_graph.nodes[node_idx]['rgb'],
+                                                  "origin_nodedepthimg":depth_data,
+                                                  "origin_nodepose":observation_graph.nodes[node_idx]['pose'],
+                                                  "worldframe_3d_position":transformed_point if bad_point==False else None
+                                                  })        
+               self.grounded_elements.extend(tracking_ids)
+          
+               if visualize: 
+                    # save anotated images to tmp folder
+                    file_name = f"observation_{node_idx}.png"
+                    annotated = self.plot_boxes(observation_graph.nodes[node_idx]['rgb'], bounds, labels, confidence,plt_size=8,file_name=file_name) #visualize grounding results
+               
+          return node_element_details
+
+
