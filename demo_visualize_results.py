@@ -15,6 +15,8 @@ if __name__ == "__main__":
     parser.add_argument('--top_down', action='store_true', default = False, help='This parameter indicates whether to show jsut top down view.')
     parser.add_argument('--save_pointcloud', action='store_true', default = False, help='This parameter indicates whether to save the pointcloud to disk.')
     parser.add_argument('--show_origin', action='store_true', default = False, help='This parameter indicates whether to show the origin coordinate used for spatial reasoning.')
+    parser.add_argument('--r3ddata',  action='store_true', default = False, help='This parameter indicates that r3d data is being used.')
+    parser.add_argument('--robotdata',  action='store_true', default = False, help='This parameter indicates that robot data is being used.')
     args = parser.parse_args()
 
     ##load data
@@ -30,7 +32,10 @@ if __name__ == "__main__":
             items_to_visualize += elements_centerpoints3d
 
         if args.rsm:
-            mask_points_of_interest = get_all_mask3dpositions(elements) 
+            if args.robotdata:
+                mask_points_of_interest = get_all_mask3dpositions(elements,data_src="robot") 
+            elif args.r3ddata:
+                mask_points_of_interest = get_all_mask3dpositions(elements,data_src="r3d") 
             pcd = color_coded_heatmap(pcd, mask_points_of_interest,threshold_percentage=1,kdtree_search_radius=0.1)
         
     if args.top_down:                               ## Visualize Top-down View of the Point Cloud

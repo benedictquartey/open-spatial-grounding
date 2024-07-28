@@ -10,6 +10,38 @@ from os import path, makedirs, listdir
 from osg.utils.dataset_class import PosedRGBDItem,R3DDataset
 
 
+def get_xyz_coordinate(depth, pose, intrinsics, x: int, y: int):
+    """Returns the XYZ coordinates for a specific pixel coordinate.
+
+    Args:
+        depth: The depth array, with shape (1, H, W)
+        pose: The pose array, with shape (4, 4)
+        intrinsics: The intrinsics array, with shape (3, 3)
+        x: The x coordinate of the pixel
+        y: The y coordinate of the pixel
+
+    Returns:
+        The XYZ coordinates of the projected point, with shape (3,)
+    """
+    device, dtype = depth.device, intrinsics.dtype
+
+    # Extract the depth value for the specific pixel
+    depth_value = depth[y, x]
+
+    # Create the homogeneous pixel coordinate
+    pixel_coord = torch.tensor([x, y, 1], device=device, dtype=dtype)
+
+    # Apply intrinsics
+    xyz = pixel_coord @ get_inv_intrinsics(intrinsics).transpose(-1, -2)
+
+    # Scale by the depth value
+    xyz = xyz * depth_value
+
+    # Apply pose transformation
+    xyz = (xyz @ pose[:3, :3].transpose(0, 1)) + pose[:3, 3]
+
+    return xyz
+
 def get_posed_rgbd_dataset(key: str,path: str) -> Dataset[PosedRGBDItem]:
         return R3DDataset(path)
 

@@ -12,9 +12,11 @@ from torchvision.ops import box_convert
 from segment_anything import build_sam, SamPredictor
 from mobile_sam import sam_model_registry, SamPredictor
 from transformers import OwlViTProcessor, OwlViTForObjectDetection, Owlv2Processor, Owlv2ForObjectDetection
+from osg.utils.record3d_utils import get_xyz_coordinate
 
 from osg.spatial_relationships import check_spatial_predicate_satisfaction
 from osg.utils.general_utils import get_center_pixel_depth, get_mask_pixels_depth, get_bounding_box_center_depth, get_bounding_box_pixels_depth, pixel_to_world_frame
+
 # import warnings
 # warnings.filterwarnings("ignore")
 class vlm_library():
@@ -218,7 +220,6 @@ class vlm_library():
      
      def obtain_relevant_element_details(self, observation_graph,propositions,visualize, use_segmentation=True):
           relevant_element_details=[]
-          # obs_idx_to_alphabet = {0:"a",1:"b",2:"c",3:"d"}
           print(f"-------------------------------------------------\nObtaining Relevant Masks\n-------------------------------------------------")
 
           for node_idx in tqdm(observation_graph.nodes):
@@ -475,7 +476,7 @@ class vlm_library():
           node_element_details = []   
           print(f"Evaluating Waypoint at Node {node_idx}")
           observation_graph.nodes[node_idx]['annotated_img']={}
-          bounds,labels,confidence = self.label_observation(observation_graph.nodes[node_idx]['rgb'],propositions,threshold=0.1)
+          bounds,labels,confidence = self.label_observation(observation_graph.nodes[node_idx]['rgb_pil'],propositions,threshold=0.1)
 
           present_propositions = list(set(labels))
           tracking_ids=[]
@@ -486,7 +487,7 @@ class vlm_library():
                if use_segmentation:
                     print(f"      Detected Task relevant elements: {present_propositions} || Segmenting to obtain masks ...")
                     # segment for masks of each proposition
-                    masks,sam_embedding=self.segment(observation_graph.nodes[node_idx]['rgb'],bounds)
+                    masks,sam_embedding=self.segment(observation_graph.nodes[node_idx]['rgb_pil'],bounds)
                else:
                     print(f"      Detected Task relevant elements: {present_propositions} || Using bounding boxes as masks ...")
                     masks = bounds
@@ -498,19 +499,19 @@ class vlm_library():
                     print(f"      Loaded depth data from waypoint node {node_idx}, ")
                except:
                     print(f"      No existing depth data || Estimating depth image...")
-                    depth_img,depth_data = self.estimate_depth(observation_graph.nodes[node_idx]['rgb'])
+                    depth_img, depth_data = self.estimate_depth(observation_graph.nodes[node_idx]['rgb_pil'])
 
                #get mask info
                for i,mask in enumerate(masks):
                     print(f"      Processing {labels[i]} mask")
                     if use_segmentation:
                          actual_mask = mask[0].cpu()
-                         center_pixel, center_pixel_depth = get_center_pixel_depth(actual_mask,depth_data)
-                         mask_pixel_coords,pixel_depths,average_depth=get_mask_pixels_depth(actual_mask,depth_data)
+                         center_pixel, center_pixel_depth = get_center_pixel_depth(actual_mask,depth_data[0])
+                         mask_pixel_coords,pixel_depths,average_depth=get_mask_pixels_depth(actual_mask,depth_data[0])
                     else:
                          actual_mask = mask
-                         center_pixel, center_pixel_depth = get_bounding_box_center_depth(actual_mask,depth_data)
-                         mask_pixel_coords,pixel_depths,average_depth=get_bounding_box_pixels_depth(actual_mask,depth_data)
+                         center_pixel, center_pixel_depth = get_bounding_box_center_depth(actual_mask,depth_data[0])
+                         mask_pixel_coords,pixel_depths,average_depth=get_bounding_box_pixels_depth(actual_mask,depth_data[0])
                     
                     print(f"         Mask {labels[i]}_{str(node_idx)}_{i} || Original Center pixel: {center_pixel} || Center pixel depth: {center_pixel_depth}")
                     center_pixel_depth=average_depth #Use average of mask depth with actual values as depth of center pixel || not just the actual center pixel depth
@@ -553,9 +554,13 @@ class vlm_library():
                          print(f"         Backprojectig 3D ray using pixel: {center_pixel} & depth: {mask_depth}m for {tracking_id}...")
                          center_y, center_x = center_pixel
                          pixel_depth = mask_depth
-                         rotation_matrix = observation_graph.nodes[node_idx]['pose']['rotation_matrix']
-                         position = observation_graph.nodes[node_idx]['pose']['position']
-                         transformed_point,bad_point = pixel_to_world_frame(center_y,center_x,pixel_depth,rotation_matrix,position)
+                         pose = observation_graph.nodes[node_idx]['pose']
+                         intrinsics = observation_graph.nodes[node_idx]['intrinsics']
+
+                         #switch to record3d approach for backprojection
+                         transformed_point = get_xyz_coordinate(depth_data[0], pose['pose_matrix'], intrinsics, center_x, center_y)
+                         # get a
+
                          print(f"         Recording mask info for {tracking_id}...")
                          node_element_details.append({"mask_label":mask_label,
                                                   "mask_id":tracking_id,
@@ -567,17 +572,17 @@ class vlm_library():
                                                   "mask_all_pixels_depth":pixel_depths,
                                                   "mask_depth":mask_depth,
                                                   "sam_embedding":sam_embedding.cpu() if torch.is_tensor(sam_embedding) else sam_embedding,
-                                                  "origin_nodeimg":observation_graph.nodes[node_idx]['rgb'],
+                                                  "origin_nodeimg":observation_graph.nodes[node_idx]['rgb_pil'],
                                                   "origin_nodedepthimg":depth_data,
                                                   "origin_nodepose":observation_graph.nodes[node_idx]['pose'],
-                                                  "worldframe_3d_position":transformed_point if bad_point==False else None
+                                                  "worldframe_3d_position":transformed_point #if bad_point==False else None
                                                   })        
                self.grounded_elements.extend(tracking_ids)
           
                if visualize: 
                     # save anotated images to tmp folder
                     file_name = f"observation_{node_idx}.png"
-                    annotated = self.plot_boxes(observation_graph.nodes[node_idx]['rgb'], bounds, labels, confidence,plt_size=8,file_name=file_name) #visualize grounding results
+                    annotated = self.plot_boxes(observation_graph.nodes[node_idx]['rgb_pil'], bounds, labels, confidence,plt_size=8,file_name=file_name) #visualize grounding results
                
           return node_element_details
 

@@ -137,7 +137,6 @@ def get_bounding_box_pixels_depth(bounding_box,depth_img):
 
     return bounding_box_pixel_coords,depths,average_depth
 
-
 def pixel_to_world_frame(i,j,pixel_depth,rotation_matrix,position):
     '''
     Converts a pixel (i,j) in HxW image to 3d position in world frame (spot 'vision' frame)
@@ -176,7 +175,7 @@ def pixel_to_world_frame(i,j,pixel_depth,rotation_matrix,position):
     transformed_xyz = np.matmul(rotation_matrix,camera2hand) + position  
     return(transformed_xyz,bad_z)
 
-def decompose_pose_batch(pose):
+def decompose_pose_batch(homogeneous_pose_matrix):
     """Decomposes a 4x4 homogeneous transformation pose matrix into position and rotation components.
 
     Args:
@@ -186,11 +185,11 @@ def decompose_pose_batch(pose):
         position: The translation vector, with shape (B, 3)
         rotation: The rotation matrix, with shape (B, 3, 3)
     """
-    position = pose[:, :3, 3]
-    rotation = pose[:, :3, :3]
+    position = homogeneous_pose_matrix[:, :3, 3]
+    rotation = homogeneous_pose_matrix[:, :3, :3]
     return position, rotation
 
-def decompose_pose_single(pose):
+def decompose_pose_single(homogeneous_pose_matrix):
     """Decomposes a single 4x4 homogeneous transformation pose matrix into position and rotation components.
 
     Args:
@@ -200,8 +199,8 @@ def decompose_pose_single(pose):
         position: The translation vector, with shape (3)
         rotation: The rotation matrix, with shape (3, 3)
     """
-    position = pose[:3, 3]
-    rotation = pose[:3, :3]
+    position = homogeneous_pose_matrix[:3, 3]
+    rotation = homogeneous_pose_matrix[:3, :3]
     return position, rotation
 
 def load_r3d_data(data_file,tmp_fldr,depth_confidence_cutoff=0.7, pcd_downsample=False):
@@ -209,7 +208,8 @@ def load_r3d_data(data_file,tmp_fldr,depth_confidence_cutoff=0.7, pcd_downsample
         makedirs(tmp_fldr)
     observation_data = {'image_data':{},
     'depth_data':{},
-    'pose_data':{}}
+    'pose_data':{},
+    'intrinsics':{}}
 
     posed_dataset = get_posed_rgbd_dataset(key="r3d", path=data_file)
     #load pointcloud
@@ -234,6 +234,7 @@ def load_r3d_data(data_file,tmp_fldr,depth_confidence_cutoff=0.7, pcd_downsample
         observation_data['pose_data'][waypoint_name]['position'] = position
         observation_data['pose_data'][waypoint_name]['rotation_matrix'] = rotation_matrix
         observation_data['depth_data'][waypoint_name] = posed_dataset[idx].depth
+        observation_data['intrinsics'][waypoint_name] = posed_dataset[idx].intrinsics
 
     return posed_dataset, observation_data, env_pointcloud
 
@@ -308,21 +309,27 @@ def create_r3d_observation_graph(observation_data,tmp_fldr=None):
         observations_graph (nx.Graph): The observation graph.
     """
     observations_graph = nx.Graph()
+    node_id2key = {}
+    node_key2id = {}
     node_coords = {}
     to_pil = ToPILImage()
 
     for i,node_key in enumerate(observation_data['image_data'].keys()):
+        node_id2key[i] = node_key
+        node_key2id[node_key] = i
         # print(f"Adding node {i} with key {node_key} to graph")
-        node_image = to_pil(observation_data['image_data'][node_key])
+        node_image = observation_data['image_data'][node_key]
+        node_pil_image = to_pil(node_image)
         node_depth = observation_data['depth_data'][node_key]
         node_pose = observation_data['pose_data'][node_key]
         coord = tuple(node_pose['position'][0:2]) #x,y axis from position
-        observations_graph.add_node(node_for_adding=i, rgb=node_image, depth_data=node_depth, pose=node_pose, waypoint_key=node_key, xy_coordinate=coord)
+        intrinsics = observation_data['intrinsics'][node_key]
+        observations_graph.add_node(node_for_adding=i, rgb_tensor=node_image, rgb_pil=node_pil_image,depth_data=node_depth, pose=node_pose, waypoint_key=node_key, xy_coordinate=coord, intrinsics=intrinsics)
         node_coords[i]=coord
     #save waypoint info to disk
 
     np.save(tmp_fldr+f'waypoints.npy', observation_data['pose_data'])
-    return observations_graph,node_coords
+    return observations_graph,node_id2key, node_key2id,node_coords
 
 def create_robot_observation_graph(observation_data,edge_connectivity,tmp_fldr=None):
     """

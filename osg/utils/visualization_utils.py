@@ -152,7 +152,7 @@ def color_coded_heatmap(point_cloud, mask_positions_of_interest, threshold_perce
     return point_cloud
     # o3d.visualization.draw_geometries([point_cloud])
 
-def get_all_mask3dpositions(elements,diff_threshold = 0.5):
+def get_all_mask3dpositions(elements,diff_threshold = 0.5, data_src=None):
     mask_points_of_interest = {}
     for element in elements:
         mask3dpositions=[]
