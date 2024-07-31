@@ -198,7 +198,18 @@ def get_arrs( r3d_file: ZipFile, meta: Metadata, use_depth_shape: bool = True,) 
             conf_arr[depth_is_nan_arr] = 0
         conf_arrs[i] = conf_arr if use_depth_shape else to_img_shape(conf_arr)
 
-    masks_arrs = conf_arrs != 2
+    #https://developer.apple.com/documentation/arkit/arconfidencelevel,
+    #ARKIT confidence masks have 3 values
+    # case low: 0
+        # Depth-value accuracy in which the framework is less confident.
+
+    # case medium: 1
+        # Depth-value accuracy in which the framework is moderately confident.
+
+    # case high: 2
+        # Depth-value accuracy in which the framework is fairly confident.
+
+    masks_arrs = conf_arrs != 2  # 2 is the value for a highest confidence depth point, set to False and set all others to True || we can invert this mask when it is used
 
     return img_arrs, depth_arrs, masks_arrs
 

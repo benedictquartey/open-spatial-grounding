@@ -12,10 +12,10 @@ from torchvision.ops import box_convert
 from segment_anything import build_sam, SamPredictor
 from mobile_sam import sam_model_registry, SamPredictor
 from transformers import OwlViTProcessor, OwlViTForObjectDetection, Owlv2Processor, Owlv2ForObjectDetection
-from osg.utils.record3d_utils import get_xyz_coordinate,get_xyz
+from osg.utils.record3d_utils import get_xyz_coordinate
 
 from osg.spatial_relationships import check_spatial_predicate_satisfaction
-from osg.utils.general_utils import get_center_pixel_depth, get_mask_pixels_depth, get_bounding_box_center_depth, get_bounding_box_pixels_depth, pixel_to_world_frame
+from osg.utils.general_utils import get_center_pixel_depth, get_mask_pixels_depth, get_bounding_box_center_depth, get_bounding_box_pixels_depth, spot_pixel_to_world_frame
 
 # import warnings
 # warnings.filterwarnings("ignore")
@@ -290,6 +290,7 @@ class vlm_library():
                                                             "mask_all_pixels_depth":details['mask_all_pixels_depth'],
                                                             "origin_nodepose":details['origin_nodepose'],
                                                             "worldframe_3d_position":details['worldframe_3d_position'],
+                                                            "intrinsics":details['intrinsics']
                                                             })
           
           np.save(f"{self.tmp_fldr}/{name}.npy", minimal_relevant_element_details)
@@ -349,29 +350,6 @@ class vlm_library():
           time_end = time.time()
           print(f"Worker {job_id} || Time taken: {time_end-time_init} seconds")
           sys.stdout.close()
-
-     # def process_node_thread(self, job_id, tasks_slice, observation_graph, propositions, visualize, use_segmentation):
-     #      worker_elements = []
-     #      exp_dir = os.path.join(self.tmp_fldr+"/vlmlogs")
-     #      try: 
-     #           if not os.path.exists(exp_dir):
-     #                os.makedirs(exp_dir)
-     #      except:
-     #                print("Output directory already exists, moving on ...")
-     #      sys.stdout = open(f'{exp_dir}/worker{job_id}.out', 'w+')
-     #      time_init = time.time()
-
-     #      # for i,node_idx in enumerate(tasks_slice):
-     #      print(f"Worker {job_id} || Task len: {len(tasks_slice)} || Node {tasks_slice}")
-     #      node_element_details = self.process_nodes_r3d(tasks_slice, observation_graph, propositions, visualize, use_segmentation)
-     #      worker_elements.extend(node_element_details)
-     #      print(f"Worker {job_id} || Task len: {len(tasks_slice)} || Node {tasks_slice} Completed")
-          
-     #      np.save(f"{exp_dir}/worker{job_id}_elements.npy", worker_elements)
-
-     #      time_end = time.time()
-     #      print(f"Worker {job_id} || Time taken: {time_end-time_init} seconds")
-     #      sys.stdout.close()
 
 
      def process_node_robot(self, node_idx ,observation_graph, propositions, visualize, use_segmentation=True):
@@ -462,7 +440,8 @@ class vlm_library():
                               pixel_depth = mask_depth
                               rotation_matrix = observation_graph.nodes[node_idx]['pose'][obs_idx]['rotation_matrix']
                               position = observation_graph.nodes[node_idx]['pose'][obs_idx]['position']
-                              transformed_point,bad_point = pixel_to_world_frame(center_y,center_x,pixel_depth,rotation_matrix,position)
+                              transformed_point,bad_point = spot_pixel_to_world_frame(center_y,center_x,pixel_depth,rotation_matrix,position)
+                              print(f"         XYZ: {transformed_point} || Bad point?: {bad_point}")
                               print(f"         Recording mask info for {tracking_id}...")
                               node_element_details.append({"mask_label":mask_label,
                                                        "mask_id":tracking_id,
@@ -477,6 +456,7 @@ class vlm_library():
                                                        "origin_nodeimg":observation_graph.nodes[node_idx]['rgb'][obs_idx],
                                                        "origin_nodedepthimg":depth_data,
                                                        "origin_nodepose":observation_graph.nodes[node_idx]['pose'][obs_idx],
+                                                       "intrinsics":None,
                                                        "worldframe_3d_position":transformed_point if bad_point==False else None
                                                        })        
                     self.grounded_elements.extend(tracking_ids)
@@ -519,7 +499,7 @@ class vlm_library():
 
                #get depth info
                try :
-                    depth_data = observation_graph.nodes[node_idx]['depth_data']
+                    depth_data = observation_graph.nodes[node_idx]['confidence_masked_depth'].squeeze()
                     print(f"      Loaded depth data from waypoint node {node_idx}, ")
                except:
                     print(f"      No existing depth data || Estimating depth image...")
@@ -530,12 +510,12 @@ class vlm_library():
                     print(f"      Processing {labels[i]} mask")
                     if use_segmentation:
                          actual_mask = mask[0].cpu()
-                         center_pixel, center_pixel_depth = get_center_pixel_depth(actual_mask,depth_data[0])
-                         mask_pixel_coords,pixel_depths,average_depth=get_mask_pixels_depth(actual_mask,depth_data[0])
+                         center_pixel, center_pixel_depth = get_center_pixel_depth(actual_mask,depth_data)
+                         mask_pixel_coords,pixel_depths,average_depth=get_mask_pixels_depth(actual_mask,depth_data)
                     else:
                          actual_mask = mask
-                         center_pixel, center_pixel_depth = get_bounding_box_center_depth(actual_mask,depth_data[0])
-                         mask_pixel_coords,pixel_depths,average_depth=get_bounding_box_pixels_depth(actual_mask,depth_data[0])
+                         center_pixel, center_pixel_depth = get_bounding_box_center_depth(actual_mask,depth_data)
+                         mask_pixel_coords,pixel_depths,average_depth=get_bounding_box_pixels_depth(actual_mask,depth_data)
                     
                     print(f"         Mask {labels[i]}_{str(node_idx)}_{i} || Original Center pixel: {center_pixel} || Center pixel depth: {center_pixel_depth}")
                     center_pixel_depth=average_depth #Use average of mask depth with actual values as depth of center pixel || not just the actual center pixel depth
@@ -582,8 +562,8 @@ class vlm_library():
                          intrinsics = observation_graph.nodes[node_idx]['intrinsics']
 
                          #switch to record3d approach for backprojection
-                         transformed_point = get_xyz_coordinate(depth_data[0], pose['pose_matrix'], intrinsics, center_x, center_y)
-                         # get a
+                         transformed_point,bad_point = get_xyz_coordinate(center_x, center_y, pixel_depth, pose['pose_matrix'], intrinsics)
+                         print(f"         XYZ: {transformed_point} || Bad point?: {bad_point}")
 
                          print(f"         Recording mask info for {tracking_id}...")
                          node_element_details.append({"mask_label":mask_label,
@@ -599,7 +579,8 @@ class vlm_library():
                                                   "origin_nodeimg":observation_graph.nodes[node_idx]['rgb_pil'],
                                                   "origin_nodedepthimg":depth_data,
                                                   "origin_nodepose":observation_graph.nodes[node_idx]['pose'],
-                                                  "worldframe_3d_position":transformed_point #if bad_point==False else None
+                                                  "worldframe_3d_position":transformed_point if bad_point==False else None, 
+                                                  "intrinsics":intrinsics
                                                   })        
                self.grounded_elements.extend(tracking_ids)
           

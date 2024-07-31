@@ -1,8 +1,8 @@
 import open3d as o3d
 import numpy as np
 import matplotlib.pyplot as plt
-from osg.utils.general_utils import pixel_to_world_frame
-
+from osg.utils.general_utils import spot_pixel_to_world_frame
+from osg.utils.record3d_utils import get_xyz_coordinate
 
 COLORS = {
     "Deep_Red": [1.0, 0.0, 0.0],
@@ -167,7 +167,12 @@ def get_all_mask3dpositions(elements,diff_threshold = 0.5, data_src=None):
                 continue
             rotation_matrix = element['origin_nodepose']['rotation_matrix']
             position = element['origin_nodepose']['position']
-            transformed_point,bad_point = pixel_to_world_frame(center_y,center_x,pixel_depth,rotation_matrix,position)
+            intrinsics = element['intrinsics']
+            if data_src == "robot":
+                transformed_point,bad_point = spot_pixel_to_world_frame(center_y,center_x,pixel_depth,rotation_matrix,position)
+            elif data_src == "r3d":
+                transformed_point,bad_point = get_xyz_coordinate(center_x, center_y, pixel_depth, element['origin_nodepose']['pose_matrix'], intrinsics)
+
             mask3dpositions.append(transformed_point)
         try:
             mask_points_of_interest[element["mask_label"]].extend(mask3dpositions)

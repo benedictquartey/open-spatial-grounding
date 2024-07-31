@@ -11,7 +11,7 @@ from osg.utils.dataset_class import PosedRGBDItem,R3DDataset
 import networkx as nx
 
 
-def get_xyz_coordinate(depth, pose, intrinsics, x: int, y: int):
+def get_xyz_coordinate(x, y, depth_value, pose, intrinsics):
     """Returns the XYZ coordinates for a specific pixel coordinate.
 
     Args:
@@ -24,13 +24,14 @@ def get_xyz_coordinate(depth, pose, intrinsics, x: int, y: int):
     Returns:
         The XYZ coordinates of the projected point, with shape (3,)
     """
-    device, dtype = depth.device, intrinsics.dtype
+
+    dtype = intrinsics.dtype
 
     # Extract the depth value for the specific pixel
-    depth_value = depth[y, x]
+    # depth_value = depth[y, x]
 
     # Create the homogeneous pixel coordinate
-    pixel_coord = torch.tensor([x, y, 1], device=device, dtype=dtype)
+    pixel_coord = torch.tensor([x, y, 1], dtype=dtype)
 
     # Apply intrinsics
     xyz = pixel_coord @ get_inv_intrinsics(intrinsics).transpose(-1, -2)
@@ -41,7 +42,13 @@ def get_xyz_coordinate(depth, pose, intrinsics, x: int, y: int):
     # Apply pose transformation
     xyz = (xyz @ pose[:3, :3].transpose(0, 1)) + pose[:3, 3]
 
-    return xyz
+    # Mask out bad depth points.
+    bad_z = False
+    if depth_value == 0:
+        print(f"Bad depth point at ({x}, {y})")
+        bad_z = True
+
+    return xyz,bad_z
 
 def get_posed_rgbd_dataset(key: str,path: str) -> Dataset[PosedRGBDItem]:
         return R3DDataset(path)
@@ -93,7 +100,8 @@ def get_xyz(depth: Tensor, mask: Tensor, pose: Tensor, intrinsics: Tensor) -> Te
 
     return xyz
 
-def get_pointcloud(ds: Dataset[PosedRGBDItem], chunk_size: int = 16, depth_confidence_threshold:float = 0.9, downsample=False) -> Iterator[tuple[Tensor, Tensor]]:
+def get_pointcloud(ds: Dataset[PosedRGBDItem], chunk_size: int = 16, threshold:float = 0.9, downsample=False) -> Iterator[tuple[Tensor, Tensor]]:
+    #threshold determines number of points to be included in the pointcloud
     """Iterates XYZ points from the dataset.
 
     Args:
@@ -122,8 +130,9 @@ def get_pointcloud(ds: Dataset[PosedRGBDItem], chunk_size: int = 16, depth_confi
         )
         rgb = rgb.permute(0, 2, 3, 1)
         xyz = get_xyz(depth, mask, pose, intrinsics)
-        mask = (~mask & (torch.rand(mask.shape, device=mask.device) > depth_confidence_threshold)) #depth reading confidence masking
-        # mask = (~mask & (torch.rand(mask.shape) > depth_confidence_threshold)) 
+        #The resulting tensor will be True only where both ~mask is True (i.e., the original mask was False, high confidence depth value) and the random value exceeds the threshold, a kind of sampling of points to keep
+        mask = (~mask & (torch.rand(mask.shape, device=mask.device) > threshold)) #depth reading confidence masking
+        # mask = (~mask & (torch.rand(mask.shape) > threshold)) 
         rgb, xyz = rgb[mask.squeeze(1)], xyz[mask.squeeze(1)]
         rgbs.append(rgb.detach().cpu())
         xyzs.append(xyz.detach().cpu())
@@ -143,13 +152,14 @@ def get_pointcloud(ds: Dataset[PosedRGBDItem], chunk_size: int = 16, depth_confi
     return merged_pcd
 
 
-def get_pointcloud_from_graph(graph: nx.Graph, chunk_size: int = 16, depth_confidence_threshold: float = 0.9, downsample=False) -> o3d.geometry.PointCloud:
+def get_pointcloud_from_graph(graph: nx.Graph, chunk_size: int = 16, threshold: float = 0.9, downsample=False) -> o3d.geometry.PointCloud:
+    #threshold determines number of points to be included in the pointcloud
     """Generates a 3D point cloud from a NetworkX observation graph.
 
     Args:
         graph: The observation graph with nodes containing 'rgb_tensor', 'depth_data', 'pose', 'mask', and 'intrinsics'.
         chunk_size: Process this many nodes from the graph at a time.
-        depth_confidence_threshold: Confidence threshold for depth values.
+        threshold: Confidence threshold for depth values.
         downsample: Whether to downsample the point cloud.
 
     Returns:
@@ -173,7 +183,8 @@ def get_pointcloud_from_graph(graph: nx.Graph, chunk_size: int = 16, depth_confi
 
         rgb = rgb.permute(0, 2, 3, 1)
         xyz = get_xyz(depth, mask, pose, intrinsics)
-        mask = (~mask & (torch.rand(mask.shape, device=mask.device) > depth_confidence_threshold)) # depth reading confidence masking
+        #The resulting tensor will be True only where both ~mask is True (i.e., the original mask was False, high confidence depth value) and the random value exceeds the threshold, a kind of sampling of points to keep
+        mask = (~mask & (torch.rand(mask.shape, device=mask.device) > threshold)) # depth reading confidence masking
         rgb, xyz = rgb[mask.squeeze(1)], xyz[mask.squeeze(1)]
         rgbs.append(rgb.detach().cpu())
         xyzs.append(xyz.detach().cpu())

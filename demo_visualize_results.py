@@ -3,7 +3,7 @@ import argparse
 import open3d as o3d
 
 # Eg running code
-# python demo_visualize_results.py --result_dir results --rsm --show_elements --remove_roof --top_down
+# python demo_visualize_results.py --result_dir results --rsm --show_elements --remove_roof --top_down --r3ddata
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="visualize_results", description='Visualize semantic map, referents and plan')
