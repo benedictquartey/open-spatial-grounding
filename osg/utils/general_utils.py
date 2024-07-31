@@ -6,7 +6,8 @@ from os import path, makedirs
 import networkx as nx
 import random
 import string
-from osg.utils.record3d_utils import get_posed_rgbd_dataset, get_pointcloud
+from osg.utils.record3d_utils import get_posed_rgbd_dataset, get_pointcloud, get_pointcloud_from_graph
+from osg.utils.map_compression_utils import compress_observation_graph
 from torchvision.transforms import ToPILImage
 import matplotlib.pyplot as plt
 
@@ -203,40 +204,107 @@ def decompose_pose_single(homogeneous_pose_matrix):
     rotation = homogeneous_pose_matrix[:3, :3]
     return position, rotation
 
-def load_r3d_data(data_file,tmp_fldr,depth_confidence_cutoff=0.7, pcd_downsample=False):
+
+def load_r3d_data(data_file,tmp_fldr, depth_confidence_cutoff=0.7, pcd_downsample=False, compression_percentage=None, compression_technique="position_direction"):
     if not path.exists(tmp_fldr):
         makedirs(tmp_fldr)
-    observation_data = {'image_data':{},
-    'depth_data':{},
-    'pose_data':{},
-    'intrinsics':{}}
+
+    observations_graph = nx.Graph()
+    node_id2key = {}
+    node_key2id = {}
+    node_coords = {}
+    poses = {}
+    to_pil = ToPILImage()
 
     posed_dataset = get_posed_rgbd_dataset(key="r3d", path=data_file)
-    #load pointcloud
+    #posed_dataset consists of posedrgbditems, which each has image(tensor), depth(tensor), mask(tensor), pose(tensor), intrinsics(tensor)
 
+    for idx, pose in enumerate(posed_dataset.poses):
+        waypoint_name = random_string()
+        node_id2key[idx] = waypoint_name
+        node_key2id[waypoint_name] = idx
+        # print(f"{idx+1} out of {len(posed_dataset.poses)} || Getting rgbd data for waypoint:{waypoint_name}")
+
+        node_image = posed_dataset[idx].image 
+        node_pil_image = to_pil(node_image)
+        node_depth = posed_dataset[idx].depth
+        depth_confidence_mask = posed_dataset[idx].mask
+
+        node_pose = {}
+        position, rotation_matrix = decompose_pose_single(posed_dataset[idx].pose)
+        node_pose['pose_matrix'] = posed_dataset[idx].pose
+        node_pose['position'] = position
+        node_pose['rotation_matrix'] = rotation_matrix
+        coord = tuple(node_pose['position'][0:2]) #x,y axis from position
+        intrinsics = posed_dataset[idx].intrinsics
+        node_coords[idx]=coord
+
+        observations_graph.add_node(node_for_adding=idx, 
+                                    rgb_tensor=node_image, 
+                                    rgb_pil=node_pil_image,
+                                    depth_data=node_depth, 
+                                    pose_matrix =posed_dataset[idx].pose ,
+                                    pose=node_pose, 
+                                    waypoint_key=waypoint_name, 
+                                    xy_coordinate=coord, 
+                                    intrinsics=intrinsics, 
+                                    depth_confidence_mask=depth_confidence_mask)
+    
+
+    ##compress map
+    if compression_percentage!=None:
+        count = len(observations_graph.nodes)
+        if compression_technique in ["direction","position","position_direction"]:
+            observations_graph = compress_observation_graph(compression_percentage, observations_graph, group_by=compression_technique, visualize=False, tmp_fldr=tmp_fldr)
+        else:
+            print("Invalid compression technique. Please select from: ['direction','position','position_direction']")
+            return
+        print(f"Compression_percentage: {compression_percentage} || Strategy: {compression_technique} || Before compression: {count} nodes || After compression: {len(observations_graph.nodes)} nodes")
+
+    #load pointcloud
     if path.exists(f"{tmp_fldr}/pointcloud.pcd"):
         print("loading pointcloud already on disk...")
         env_pointcloud = o3d.io.read_point_cloud(f"{tmp_fldr}/pointcloud.pcd")
     else:
         print("generating scene pointcloud...")
-        env_pointcloud = get_pointcloud(posed_dataset, threshold=depth_confidence_cutoff, downsample=pcd_downsample)
+        env_pointcloud = get_pointcloud_from_graph(observations_graph, depth_confidence_threshold=depth_confidence_cutoff, downsample=pcd_downsample)
+        # env_pointcloud = get_pointcloud(posed_dataset, depth_confidence_threshold=depth_confidence_cutoff, downsample=pcd_downsample) #pointcloud from posedrgbd dataset
+
         #do not save pointcloud if already exists
         print("saving pointcloud to disk...")
         o3d.io.write_point_cloud(f"{tmp_fldr}/pointcloud.pcd", env_pointcloud)
         print("")
-    for idx, pose in enumerate(posed_dataset.poses):
-        waypoint_name = random_string()
-        print(f"{idx+1} out of {len(posed_dataset.poses)} || Getting rgbd data for waypoint:{waypoint_name}")
-        observation_data['image_data'][waypoint_name] = posed_dataset[idx].image
-        observation_data['pose_data'][waypoint_name] = {}
-        position, rotation_matrix = decompose_pose_single(posed_dataset[idx].pose)
-        observation_data['pose_data'][waypoint_name]['pose_matrix'] = posed_dataset[idx].pose
-        observation_data['pose_data'][waypoint_name]['position'] = position
-        observation_data['pose_data'][waypoint_name]['rotation_matrix'] = rotation_matrix
-        observation_data['depth_data'][waypoint_name] = posed_dataset[idx].depth
-        observation_data['intrinsics'][waypoint_name] = posed_dataset[idx].intrinsics
 
-    return posed_dataset, observation_data, env_pointcloud
+    #save waypoint info to disk
+    for nodeidx in observations_graph.nodes:
+        waypoint_name = observations_graph.nodes[nodeidx]['waypoint_key']
+        poses[waypoint_name] = observations_graph.nodes[nodeidx]['pose']
+
+    #save waypoint info to disk
+    np.save(tmp_fldr+f'waypoints.npy', poses)
+        
+
+    return env_pointcloud, observations_graph, node_id2key, node_key2id, node_coords
+
+
+def get_node_key_values(graph: nx.Graph, key: str) -> list:
+    """Get a list of values for a specific key from all nodes in the graph.
+
+    Args:
+        graph: The NetworkX graph.
+        key: The key to extract values for.
+
+    Returns:
+        A list of values associated with the specified key from all nodes.
+    """
+    values = []
+    for node, data in graph.nodes(data=True):
+        if key in data:
+            values.append(data[key])
+        else:
+            values.append(None)  # Or handle missing keys as needed
+
+    return values
 
 def load_robot_data(data_path,tmp_fldr):
     """
@@ -297,39 +365,6 @@ def load_robot_data(data_path,tmp_fldr):
 
     return observation_data, edge_connectivity, env_pointcloud
 
-def create_r3d_observation_graph(observation_data,tmp_fldr=None):
-    """
-    This function creates the observation graph from the observation data and edge connectivity data.
-
-    Parameters:
-        observation_data (dict): The observation data dictionary.
-        edge_connectivity (dict): The edge connectivity dictionary.
-
-    Returns:
-        observations_graph (nx.Graph): The observation graph.
-    """
-    observations_graph = nx.Graph()
-    node_id2key = {}
-    node_key2id = {}
-    node_coords = {}
-    to_pil = ToPILImage()
-
-    for i,node_key in enumerate(observation_data['image_data'].keys()):
-        node_id2key[i] = node_key
-        node_key2id[node_key] = i
-        # print(f"Adding node {i} with key {node_key} to graph")
-        node_image = observation_data['image_data'][node_key]
-        node_pil_image = to_pil(node_image)
-        node_depth = observation_data['depth_data'][node_key]
-        node_pose = observation_data['pose_data'][node_key]
-        coord = tuple(node_pose['position'][0:2]) #x,y axis from position
-        intrinsics = observation_data['intrinsics'][node_key]
-        observations_graph.add_node(node_for_adding=i, rgb_tensor=node_image, rgb_pil=node_pil_image,depth_data=node_depth, pose=node_pose, waypoint_key=node_key, xy_coordinate=coord, intrinsics=intrinsics)
-        node_coords[i]=coord
-    #save waypoint info to disk
-
-    np.save(tmp_fldr+f'waypoints.npy', observation_data['pose_data'])
-    return observations_graph,node_id2key, node_key2id,node_coords
 
 def create_robot_observation_graph(observation_data,edge_connectivity,tmp_fldr=None):
     """

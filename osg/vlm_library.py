@@ -12,7 +12,7 @@ from torchvision.ops import box_convert
 from segment_anything import build_sam, SamPredictor
 from mobile_sam import sam_model_registry, SamPredictor
 from transformers import OwlViTProcessor, OwlViTForObjectDetection, Owlv2Processor, Owlv2ForObjectDetection
-from osg.utils.record3d_utils import get_xyz_coordinate
+from osg.utils.record3d_utils import get_xyz_coordinate,get_xyz
 
 from osg.spatial_relationships import check_spatial_predicate_satisfaction
 from osg.utils.general_utils import get_center_pixel_depth, get_mask_pixels_depth, get_bounding_box_center_depth, get_bounding_box_pixels_depth, pixel_to_world_frame
@@ -326,6 +326,7 @@ class vlm_library():
 
           return relevant_element_details
 
+##Original process_node_thread function
      def process_node_thread(self, job_id, tasks_slice, observation_graph, propositions, visualize, use_segmentation):
           worker_elements = []
           exp_dir = os.path.join(self.tmp_fldr+"/vlmlogs")
@@ -348,6 +349,29 @@ class vlm_library():
           time_end = time.time()
           print(f"Worker {job_id} || Time taken: {time_end-time_init} seconds")
           sys.stdout.close()
+
+     # def process_node_thread(self, job_id, tasks_slice, observation_graph, propositions, visualize, use_segmentation):
+     #      worker_elements = []
+     #      exp_dir = os.path.join(self.tmp_fldr+"/vlmlogs")
+     #      try: 
+     #           if not os.path.exists(exp_dir):
+     #                os.makedirs(exp_dir)
+     #      except:
+     #                print("Output directory already exists, moving on ...")
+     #      sys.stdout = open(f'{exp_dir}/worker{job_id}.out', 'w+')
+     #      time_init = time.time()
+
+     #      # for i,node_idx in enumerate(tasks_slice):
+     #      print(f"Worker {job_id} || Task len: {len(tasks_slice)} || Node {tasks_slice}")
+     #      node_element_details = self.process_nodes_r3d(tasks_slice, observation_graph, propositions, visualize, use_segmentation)
+     #      worker_elements.extend(node_element_details)
+     #      print(f"Worker {job_id} || Task len: {len(tasks_slice)} || Node {tasks_slice} Completed")
+          
+     #      np.save(f"{exp_dir}/worker{job_id}_elements.npy", worker_elements)
+
+     #      time_end = time.time()
+     #      print(f"Worker {job_id} || Time taken: {time_end-time_init} seconds")
+     #      sys.stdout.close()
 
 
      def process_node_robot(self, node_idx ,observation_graph, propositions, visualize, use_segmentation=True):
@@ -587,3 +611,90 @@ class vlm_library():
           return node_element_details
 
 
+# *********************** BATCH PROCESSING Experimental ************************
+     def batch_label_observations(self, observations, propositions_to_ground, threshold):
+          """
+          Given a list of observations, a list of propositions, and a threshold, this function returns a list corresponding to which propositions are true in each observation.
+
+          Parameters:
+               observations (list): The list of observations to be labeled.
+               propositions_to_ground (list): A list of propositions to be grounded in the observations.
+               threshold (float): The minimum score for a proposition to be labeled.
+
+          Returns:
+               bounds_list:, labels_list, scores_list: The bounding boxes, labels, and scores for the propositions that are true in each observation.
+          """
+          return self.batch_label_observation_owl_vit(observations, propositions_to_ground, threshold)
+
+     def batch_label_observation_owl_vit(self, observations, propositions_to_ground, score_threshold=0.1):
+          # Prepare a list of text queries for each image
+          text_queries = [propositions_to_ground for _ in observations]
+          inputs = self.vl_processor(text=text_queries, images=observations, return_tensors="pt", padding=True).to(self.device)
+          
+          with torch.no_grad():
+               outputs = self.vl_model(**inputs)
+
+          target_sizes = torch.Tensor([obs.size[::-1] for obs in observations]).to(self.device)
+          results = self.vl_processor.post_process_object_detection(outputs=outputs, target_sizes=target_sizes)
+
+          bounds_list, labels_list, confidence_list = [], [], []
+
+          for result in results:
+               boxes, scores, labels = result["boxes"], result["scores"], result["labels"]
+
+               detected_propositions = []
+               for box, score, label in zip(boxes, scores, labels):
+                    box = [round(i, 2) for i in box.tolist()]
+                    if score >= score_threshold:
+                         detected_propositions.append({"label": propositions_to_ground[label], "bounds": box, "confidence": round(score.item(), 2)})
+
+               bounds = [d['bounds'] for d in detected_propositions]
+               labels = [d['label'] for d in detected_propositions]
+               confidence = [round(d['confidence'], 2) for d in detected_propositions]
+
+               bounds_list.append(torch.Tensor(bounds))
+               labels_list.append(labels)
+               confidence_list.append(confidence)
+
+          return bounds_list, labels_list, confidence_list
+
+     def batch_segment(self, images, boxes_list):
+          """
+          Given a list of images and corresponding bounding boxes, this function returns segmentation masks for each image.
+
+          Parameters:
+               images (list): The list of images to be segmented.
+               boxes_list (list): A list of bounding boxes for each image.
+
+          Returns:
+               masks_list: The segmentation masks for each image.
+               sam_embeddings_list: The SAM embeddings for each image.
+          """
+          images_np = [np.asarray(image) for image in images]
+          masks_list = []
+          sam_embeddings_list = []
+
+          for image_np, boxes in zip(images_np, boxes_list):
+               print("Processing image shape...", image_np.shape)
+
+               self.seg_model.set_image(image_np)  # set the image for the predictor
+               sam_embedding = self.seg_model.get_image_embedding()  # get image embedding
+               transformed_boxes = self.seg_model.transform.apply_boxes_torch(boxes, image_np.shape[:2]).to(self.device)
+               print("Transformed boxes shape:", transformed_boxes.shape)
+               print("Transformed boxes:", transformed_boxes)
+               if transformed_boxes.shape[0] == 0:
+                    print("No boxes detected in the image... skipping ...")
+                    masks_list.append([])
+                    sam_embeddings_list.append(sam_embedding)
+                    continue
+
+               masks, scores, logits = self.seg_model.predict_torch(
+                    point_coords=None,
+                    point_labels=None,
+                    boxes=transformed_boxes,
+                    multimask_output=False,
+               )
+               masks_list.append(masks)
+               sam_embeddings_list.append(sam_embedding)
+
+          return masks_list, sam_embeddings_list

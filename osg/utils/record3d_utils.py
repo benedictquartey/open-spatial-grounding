@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from torch.utils.data.dataset import Dataset
 from os import path, makedirs, listdir
 from osg.utils.dataset_class import PosedRGBDItem,R3DDataset
+import networkx as nx
 
 
 def get_xyz_coordinate(depth, pose, intrinsics, x: int, y: int):
@@ -92,7 +93,7 @@ def get_xyz(depth: Tensor, mask: Tensor, pose: Tensor, intrinsics: Tensor) -> Te
 
     return xyz
 
-def get_pointcloud(ds: Dataset[PosedRGBDItem], chunk_size: int = 16, threshold:float = 0.9, downsample=False) -> Iterator[tuple[Tensor, Tensor]]:
+def get_pointcloud(ds: Dataset[PosedRGBDItem], chunk_size: int = 16, depth_confidence_threshold:float = 0.9, downsample=False) -> Iterator[tuple[Tensor, Tensor]]:
     """Iterates XYZ points from the dataset.
 
     Args:
@@ -106,7 +107,7 @@ def get_pointcloud(ds: Dataset[PosedRGBDItem], chunk_size: int = 16, threshold:f
         point, with shape (B, H, W)
     """
 
-    #device = torch.device('cuda') if torch.cuda.is_available() else torch.deivce('cpu')
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     ds_len = len(ds)  # type: ignore
     xyzs = []
     rgbs = []
@@ -121,8 +122,8 @@ def get_pointcloud(ds: Dataset[PosedRGBDItem], chunk_size: int = 16, threshold:f
         )
         rgb = rgb.permute(0, 2, 3, 1)
         xyz = get_xyz(depth, mask, pose, intrinsics)
-        #mask = (~mask & (torch.rand(mask.shape, device=mask.device) > threshold))
-        mask = (~mask & (torch.rand(mask.shape) > threshold)) #depth reading confidence masking
+        mask = (~mask & (torch.rand(mask.shape, device=mask.device) > depth_confidence_threshold)) #depth reading confidence masking
+        # mask = (~mask & (torch.rand(mask.shape) > depth_confidence_threshold)) 
         rgb, xyz = rgb[mask.squeeze(1)], xyz[mask.squeeze(1)]
         rgbs.append(rgb.detach().cpu())
         xyzs.append(xyz.detach().cpu())
@@ -139,4 +140,56 @@ def get_pointcloud(ds: Dataset[PosedRGBDItem], chunk_size: int = 16, threshold:f
         merged_pcd = merged_pcd.voxel_down_sample(voxel_size=vl_size)
     else:
          print("Skipped downsampling ... ")
+    return merged_pcd
+
+
+def get_pointcloud_from_graph(graph: nx.Graph, chunk_size: int = 16, depth_confidence_threshold: float = 0.9, downsample=False) -> o3d.geometry.PointCloud:
+    """Generates a 3D point cloud from a NetworkX observation graph.
+
+    Args:
+        graph: The observation graph with nodes containing 'rgb_tensor', 'depth_data', 'pose', 'mask', and 'intrinsics'.
+        chunk_size: Process this many nodes from the graph at a time.
+        depth_confidence_threshold: Confidence threshold for depth values.
+        downsample: Whether to downsample the point cloud.
+
+    Returns:
+        A 3D point cloud.
+    """
+
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    nodes = list(graph.nodes(data=True))
+    num_nodes = len(nodes)
+    xyzs = []
+    rgbs = []
+
+    for chunk_start in range(0, num_nodes, chunk_size):
+        chunk_end = min(chunk_start + chunk_size, num_nodes)
+        chunk_nodes = nodes[chunk_start:chunk_end]
+
+        rgb, depth, mask, pose, intrinsics = (
+            torch.stack([node_data[attr] for _, node_data in chunk_nodes], dim=0).to(device)
+            for attr in ['rgb_tensor', 'depth_data', 'depth_confidence_mask', 'pose_matrix', 'intrinsics']
+        )
+
+        rgb = rgb.permute(0, 2, 3, 1)
+        xyz = get_xyz(depth, mask, pose, intrinsics)
+        mask = (~mask & (torch.rand(mask.shape, device=mask.device) > depth_confidence_threshold)) # depth reading confidence masking
+        rgb, xyz = rgb[mask.squeeze(1)], xyz[mask.squeeze(1)]
+        rgbs.append(rgb.detach().cpu())
+        xyzs.append(xyz.detach().cpu())
+
+    xyzs = torch.vstack(xyzs)
+    rgbs = torch.vstack(rgbs)
+
+    merged_pcd = o3d.geometry.PointCloud()
+    merged_pcd.points = o3d.utility.Vector3dVector(xyzs.numpy())
+    merged_pcd.colors = o3d.utility.Vector3dVector(rgbs.numpy())
+
+    if downsample:
+        vl_size = 0.02
+        print(f"Downsampling pointcloud || voxel_size: {vl_size}... ")
+        merged_pcd = merged_pcd.voxel_down_sample(voxel_size=vl_size)
+    else:
+        print("Skipped downsampling ... ")
+
     return merged_pcd
