@@ -1,8 +1,7 @@
 import open3d as o3d
 import numpy as np
 import matplotlib.pyplot as plt
-from osg.utils.general_utils import spot_pixel_to_world_frame
-from osg.utils.record3d_utils import get_xyz_coordinate
+from osg.utils.pointcloud_utils import get_xyz_coordinate, spot_pixel_to_world_frame
 
 COLORS = {
     "Deep_Red": [1.0, 0.0, 0.0],

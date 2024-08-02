@@ -6,11 +6,17 @@ from os import path, makedirs
 import networkx as nx
 import random
 import string
-from osg.utils.record3d_utils import get_posed_rgbd_dataset, get_pointcloud, get_pointcloud_from_graph
+from osg.utils.pointcloud_utils import get_posed_rgbd_dataset, get_pointcloud_from_graph_r3d, get_pointcloud_from_graph_robot
 from osg.utils.map_compression_utils import compress_observation_graph
 from torchvision.transforms import ToPILImage
 import matplotlib.pyplot as plt
 import torch
+import cv2
+import tqdm
+import torch
+from torch import Tensor
+
+
 
 #function to generate random numeric alphanumeric string
 def random_string(string_length=20):
@@ -139,45 +145,6 @@ def get_bounding_box_pixels_depth(bounding_box,depth_img):
 
     return bounding_box_pixel_coords,depths,average_depth
 
-def spot_pixel_to_world_frame(i,j,pixel_depth,rotation_matrix,position):
-    '''
-    Converts a pixel (i,j) in HxW image to 3d position in world frame (spot 'vision' frame)
-    i,j: pixel location in image
-    depth_img: HxW depth image
-    rotaton_matrix: 3x3 rotation matrix in world frame
-    position: 3x1 position vector in world frame
-   
-    Note: “vision” frame: An inertial frame that estimates the fixed location in the world (relative to where the robot is booted up),
-    and is calculated using visual analysis of the world and the robot’s odometry.
-    ''' 
-    #hand_tform_camera comes from line below, just a hardcoded version of it
-    #rot2 = mesh_frame.get_rotation_matrix_from_xyz((0, np.pi/2, -np.pi/2))
-    
-    hand_tform_camera = np.array([[ 3.74939946e-33,6.12323400e-17,1.00000000e+00],
-    [-1.00000000e+00,6.12323400e-17,0.00000000e+00],
-    [-6.12323400e-17,-1.00000000e+00,6.12323400e-17]])  
-
-    #Intrinsics for RGB hand camera on spot
-    CX = 320
-    CY = 240
-    FX= 552.0291012161067
-    FY = 552.0291012161067
-
-    #Compute 3d position of pixel(i,j) in camera frame/cordinate system. Optical center is origin
-    z_RGB = pixel_depth
-    x_RGB = (j - CX) * z_RGB / FX
-    y_RGB = (i - CY) * z_RGB / FY   
-
-    bad_z = False
-    if z_RGB == 0:
-        bad_z = True
-    
-    #Move from camera frame to robot hand frame
-    camera2hand = np.matmul(hand_tform_camera,np.array([x_RGB,y_RGB,z_RGB]))
-
-    #World (vision) frame is the hand frame rotated by the robot rotation matrix in world frame and translated by the robot position in world frame
-    transformed_xyz = np.matmul(rotation_matrix,camera2hand) + position  
-    return(transformed_xyz,bad_z)
 
 def decompose_pose_batch(homogeneous_pose_matrix):
     """Decomposes a 4x4 homogeneous transformation pose matrix into position and rotation components.
@@ -207,13 +174,13 @@ def decompose_pose_single(homogeneous_pose_matrix):
     rotation = homogeneous_pose_matrix[:3, :3]
     return position, rotation
 
-def load_data(data_path, data_src, tmp_fldr, pcd_downsample, compression_percentage):
+def load_data(data_path, data_src, tmp_fldr, pcd_downsample, compression_percentage, compression_technique=None):
     if data_src == "robot":
-        return load_robot_data(data_path, tmp_fldr)
+        return load_robot_data(data_path, tmp_fldr, pcd_downsample, compression_percentage, compression_technique)
     elif data_src == "r3d":
-        return load_r3d_data(data_path, tmp_fldr, pcd_downsample, compression_percentage)
+        return load_r3d_data(data_path, tmp_fldr, pcd_downsample, compression_percentage, compression_technique)
 
-def load_r3d_data(data_file,tmp_fldr, pcd_downsample=False, compression_percentage=None, compression_technique="position_direction"):
+def load_r3d_data(data_file,tmp_fldr, pcd_downsample=False, compression_percentage=None, compression_technique=None):
     if not path.exists(tmp_fldr):
         makedirs(tmp_fldr)
 
@@ -221,7 +188,6 @@ def load_r3d_data(data_file,tmp_fldr, pcd_downsample=False, compression_percenta
     node_id2key = {}
     node_key2id = {}
     node_coords = {}
-    poses = {}
     to_pil = ToPILImage()
 
     node_percentage_to_keep = 100 - compression_percentage
@@ -257,6 +223,7 @@ def load_r3d_data(data_file,tmp_fldr, pcd_downsample=False, compression_percenta
         node_coords[idx]=coord
 
         observations_graph.add_node(node_for_adding=idx, 
+                                    rep_pose=node_pose,
                                     rgb_tensor=node_image, 
                                     rgb_pil=node_pil_image,
                                     depth_data=node_depth, 
@@ -285,8 +252,8 @@ def load_r3d_data(data_file,tmp_fldr, pcd_downsample=False, compression_percenta
         env_pointcloud = o3d.io.read_point_cloud(f"{tmp_fldr}/pointcloud.pcd")
     else:
         print("generating scene pointcloud...")
-        env_pointcloud = get_pointcloud_from_graph(observations_graph, downsample=pcd_downsample)
-        # env_pointcloud = get_pointcloud(posed_dataset, downsample=pcd_downsample) #pointcloud from posedrgbd dataset
+        env_pointcloud = get_pointcloud_from_graph_r3d(observations_graph, downsample=pcd_downsample)
+        # env_pointcloud = get_pointcloud_r3d_dataset(posed_dataset, downsample=pcd_downsample) #pointcloud from posedrgbd dataset
 
         #do not save pointcloud if already exists
         print("saving pointcloud to disk...")
@@ -321,7 +288,7 @@ def get_node_key_values(graph: nx.Graph, key: str) -> list:
     return values
 
 
-def load_robot_data(data_path,tmp_fldr):
+def load_robot_data(data_path,tmp_fldr, pcd_downsample=False, compression_percentage=None, compression_technique=None):
     """
     This function loads the data from the data_path and returns the observation data and edge connectivity data.
 
@@ -338,8 +305,7 @@ def load_robot_data(data_path,tmp_fldr):
     node_key2id = {}
     node_coords = {}
 
-    #load pointcloud
-    env_pointcloud = o3d.io.read_point_cloud(f"{data_path}/pointcloud.pcd")
+    node_percentage_to_keep = 100 - compression_percentage
 
     #load single pose data
     with open(f'{data_path}/pose_data.pkl', 'rb') as f:
@@ -353,21 +319,34 @@ def load_robot_data(data_path,tmp_fldr):
     for id, waypoint_name in enumerate(poses.keys()):
         print(f"{id} out of {len(poses.keys())} || Getting cardinal images for waypoint:{waypoint_name}")
         image_collection={}
+        image_tensor_collection={}
         depth_collection={}
         pose_collection={}
+        pose_matrix_collection={}
 
         #loading cardinal data
         for i in range(4):
             image = Image.open(f'{data_path}/color_{waypoint_name}-{i}.jpg').convert("RGB")
+            #get image tensor
+            image_tensor = torch.from_numpy(np.array(image)).permute(2,0,1).float()/255
             depth =  np.load(f'{data_path}/depth_{waypoint_name}-{i}', allow_pickle=True)
             pose = all_poses[waypoint_name+f"-{i}"]
+
+            #generate pose matrix
+            pose_matrix = np.eye(4)
+            pose_matrix[:3,:3] = rotation_matrix_from_quaternion(pose['quaternion(wxyz)'])
+            pose_matrix[:3,3] = pose['position']
+            pose_matrix_collection[i]=pose_matrix
+
             image_collection[i]=image
+            image_tensor_collection[i]=image_tensor
             depth_collection[i]=depth
             pose_collection[i]=pose
 
         node_id2key[id] = waypoint_name
         node_key2id[waypoint_name] = id
         node_image=image_collection
+        node_image_tensor=image_tensor_collection
         node_pose=pose_collection
         #poses for cardinal images
         for key in node_pose.keys():
@@ -378,9 +357,32 @@ def load_robot_data(data_path,tmp_fldr):
         rep_pose['rotation_matrix'] = rotation_matrix_from_quaternion(rep_pose['quaternion(wxyz)']) #computing rotation matrix from quaternion
         node_depth=depth_collection
         coord = tuple(rep_pose['position'][0:2]) #x,y axis from position
-        observations_graph.add_node(node_for_adding=id, rgb=node_image, pose=node_pose, xy_coordinate=coord, depth_data=node_depth,waypoint_key=waypoint_name,rep_pose=rep_pose)
+        observations_graph.add_node(node_for_adding=id, rgb=node_image, rgb_tensor=node_image_tensor, pose=node_pose, pose_matrix=pose_matrix_collection, xy_coordinate=coord, depth_data=node_depth,waypoint_key=waypoint_name,rep_pose=rep_pose)
         node_coords[i]=coord
     
+    # ##compress map
+    if compression_percentage!=None:
+        count = len(observations_graph.nodes)
+        if compression_technique in ["direction","position","position_direction"]:
+            print(f"Map Compression ... Keeping {node_percentage_to_keep}% of posed rgbd")
+            observations_graph = compress_observation_graph(node_percentage_to_keep, observations_graph, group_by=compression_technique, visualize=False, tmp_fldr=tmp_fldr)
+        else:
+            print("Invalid compression strategy. Please select from: ['direction','position','position_direction']")
+            return
+        print(f"\tCompression strategy: {compression_technique} || Before compression: {count} nodes || After compression: {len(observations_graph.nodes)} nodes")
+
+    #load pointcloud
+    if path.exists(f"{tmp_fldr}/pointcloud.pcd"):
+        print("loading pointcloud already on disk...")
+        env_pointcloud = o3d.io.read_point_cloud(f"{tmp_fldr}/pointcloud.pcd")
+    else:
+        print("generating scene pointcloud...")
+        env_pointcloud = get_pointcloud_from_graph_robot(observations_graph, downsample=pcd_downsample)
+        #do not save pointcloud if already exists
+        print("saving pointcloud to disk...")
+        o3d.io.write_point_cloud(f"{tmp_fldr}/pointcloud.pcd", env_pointcloud)
+        print("")
+
     #save waypoint info to disk
     np.save(tmp_fldr+f'waypoints.npy', dict(observations_graph.nodes("pose")))
 
@@ -460,3 +462,53 @@ def draw_observations_graph(observations_graph, node_coords, plt_size=(20,20),ax
         ax.tick_params(left=True, bottom=True, labelleft=True, labelbottom=True)
         plt.axis("on")
         plt.show()
+
+
+def make_pointcloud(graph: nx.Graph, chunk_size: int = 16, threshold: float = 0.9, downsample=False) -> o3d.geometry.PointCloud:
+	fill_in = False #if fill_in is True, then gaps in depth image are filled in with black (at maximal distance..?)
+	save_pc = True #if true, save point cloud to same location as dir_path+dir_name
+
+	pose_dir = pickle.load(open(f"{data_path}{pose_data_fname}","rb"))
+
+	#######################################
+	# Visualize point cloud
+
+	print("Number of files: ", len(file_names), "number of ids", len(file_ids))
+	total_pcds = []
+	total_colors = []
+	total_axes = []
+	for idx,node in enumerate(graph.nodes):
+
+		color_img = graph.nodes[node]['rgb']
+		color_img = color_img[:,:,::-1]  # RGB-> BGR
+		depth_img = pickle.load(open(f"{data_path}depth_{str(file_num)}","rb"))#cv2.imread(dir_path+dir_name+"depth_"+str(file_num)+".jpg")
+
+		H,W = depth_img.shape
+		for i in range(H):
+			for j in range(W):
+				#first apply rot2 to move camera into hand frame, then apply rotation + transform of hand frame in vision frame
+				transformed_xyz,_ = spot_pixel_to_world_frame(i,j,depth_img,rotation_matrix,position)
+
+				total_pcds.append(transformed_xyz)
+
+				# Add the color of the pixel if it exists:
+				if 0 <= j < W and 0 <= i < H:
+					total_colors.append(color_img[i,j] / 255)
+				elif fill_in:
+					total_colors.append([0., 0., 0.])
+
+		mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.6,origin=[0,0,0])
+		mesh_frame = mesh_frame.rotate(rotation_matrix, center=(0, 0, 0)).translate(position)
+		#mesh_frame.paint_uniform_color([float(file_num)/num_files, 0.1, 1-(float(file_num)/num_files)])
+
+		total_axes.append(mesh_frame)
+		
+	pcd_o3d = o3d.geometry.PointCloud()  # create a point cloud object
+	pcd_o3d.points = o3d.utility.Vector3dVector(total_pcds)
+	pcd_o3d.colors = o3d.utility.Vector3dVector(total_colors)
+
+	#bb = o3d.geometry.OrientedBoundingBox(center=np.array([0,0,0]),R=rot2_mat,extent=np.array([1,1,1]))
+
+
+
+	return(pcd_o3d)

@@ -5,6 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 import networkx as nx
+import torch
 
 def save_and_show_plot(fig, filename, visualize, tmp_fldr):
     if not os.path.exists(tmp_fldr):
@@ -29,10 +30,10 @@ def angle_between_vectors(v1, v2):
 def group_nodes_by_direction(nodes, threshold_angle=10):
     groups = []
     for node in nodes:
-        direction_vector = extract_direction_vector(node['pose']['rotation_matrix'])
+        direction_vector = extract_direction_vector(node['rep_pose']['rotation_matrix'])
         added_to_group = False
         for group in groups:
-            group_direction_vector = extract_direction_vector(group[0]['pose']['rotation_matrix'])
+            group_direction_vector = extract_direction_vector(group[0]['rep_pose']['rotation_matrix'])
             angle = angle_between_vectors(direction_vector, group_direction_vector)
             if angle <= threshold_angle:
                 group.append(node)
@@ -70,7 +71,7 @@ def plot_direction_groups(groups, visualize, tmp_fldr):
         color = colors[i]
         ax.scatter(group_x, group_y, label=f'Direction Group {i + 1}', alpha=0.6, color=color)
         for node in group:
-            direction_vector = extract_direction_vector(node['pose']['rotation_matrix'])
+            direction_vector = extract_direction_vector(node['rep_pose']['rotation_matrix'])
             ax.quiver(node['xy_coordinate'][0], node['xy_coordinate'][1],
                       direction_vector[0], direction_vector[1],
                       color=color, scale=2, scale_units='xy', angles='xy', width=0.003, headwidth=3, headlength=4)
@@ -97,7 +98,7 @@ def plot_nodes_side_by_side_direction(original_nodes, selected_nodes, direction_
         color = colors[i]
         ax1.scatter(group_x, group_y, label=f'Direction Group {i + 1}', alpha=0.6, color=color)
         for node in group:
-            direction_vector = extract_direction_vector(node['pose']['rotation_matrix'])
+            direction_vector = extract_direction_vector(node['rep_pose']['rotation_matrix'])
             ax1.quiver(node['xy_coordinate'][0], node['xy_coordinate'][1],
                        direction_vector[0], direction_vector[1],
                        color=color, scale=2, scale_units='xy', angles='xy', width=0.003, headwidth=3, headlength=4)
@@ -114,7 +115,7 @@ def plot_nodes_side_by_side_direction(original_nodes, selected_nodes, direction_
             color = colors[i]
             ax2.scatter(group_x, group_y, label=f'Direction Group {i + 1}', alpha=0.6, color=color)
             for node in group_nodes:
-                direction_vector = extract_direction_vector(node['pose']['rotation_matrix'])
+                direction_vector = extract_direction_vector(node['rep_pose']['rotation_matrix'])
                 ax2.quiver(node['xy_coordinate'][0], node['xy_coordinate'][1],
                            direction_vector[0], direction_vector[1],
                            color=color, scale=2, scale_units='xy', angles='xy', width=0.003, headwidth=3, headlength=4)
@@ -200,7 +201,7 @@ def plot_nodes_side_by_side_position_direction(original_nodes, selected_nodes, c
             color = colors[i]
             ax2.scatter(group_x, group_y, label=f'Direction Group {i + 1}', alpha=0.6, color=color)
             for node in group_nodes:
-                direction_vector = extract_direction_vector(node['pose']['rotation_matrix'])
+                direction_vector = extract_direction_vector(node['rep_pose']['rotation_matrix'])
                 ax2.quiver(node['xy_coordinate'][0], node['xy_coordinate'][1],
                            direction_vector[0], direction_vector[1],
                            color=color, scale=2, scale_units='xy', angles='xy', width=0.003, headwidth=3, headlength=4)
@@ -228,13 +229,13 @@ def compress_observation_graph(percentage_to_keep, observations_graph, group_by=
         if plot_initial_graph: plot_direction_groups(groups, visualize, tmp_fldr)  # Plot direction groups
         plot_nodes_side_by_side_direction(nodes, selected_nodes, groups, visualize, tmp_fldr)
     elif group_by == "position":
-        node_coords, kmeans, y_kmeans, centers = cluster_nodes_by_position(nodes)
+        node_coords, kmeans, y_kmeans, centers = cluster_nodes_by_position(nodes,percentage_to_keep)
         groups = create_groups_from_clusters(nodes, y_kmeans, kmeans)
         selected_nodes = select_nodes_from_groups(groups, nodes, percentage_to_keep)
         if plot_initial_graph: plot_clustering(node_coords, y_kmeans, centers, [node['waypoint_key'] for node in nodes], visualize, tmp_fldr)
         plot_nodes_side_by_side_position(nodes, selected_nodes, y_kmeans, centers, visualize, tmp_fldr)
     elif group_by == "position_direction":
-        node_coords, kmeans, y_kmeans, centers = cluster_nodes_by_position(nodes)
+        node_coords, kmeans, y_kmeans, centers = cluster_nodes_by_position(nodes,percentage_to_keep)
         groups = create_groups_from_clusters(nodes, y_kmeans, kmeans)
         selected_nodes = select_nodes_from_clusters_with_direction(groups, nodes, percentage_to_keep)
         if plot_initial_graph: plot_clustering(node_coords, y_kmeans, centers, [node['waypoint_key'] for node in nodes], visualize, tmp_fldr)
@@ -299,13 +300,22 @@ def select_nodes_from_clusters_with_direction(clusters, nodes, percentage_to_kee
 
     return selected_nodes
 
-def cluster_nodes_by_position(nodes):
+def cluster_nodes_by_position(nodes,percentage_to_keep):
     node_coords = {node['waypoint_key']: node['xy_coordinate'] for node in nodes}
-    list_of_embeddings = list(node_coords.values())
-    num_centroids = min(10, len(list_of_embeddings))
+    elements = list(node_coords.values())
+
+    # Calculate number of clusters from percentage to keep
+    total_nodes = len(nodes)
+    num_nodes_to_keep = int(max(1, int(total_nodes) * (percentage_to_keep / 100)))
+    
+    # print(f"Number of nodes to keep: {num_nodes_to_keep}")
+    # print(f"Total nodes: {total_nodes}")
+
+    # num_centroids = min(10, num_nodes_to_keep)
+    num_centroids = num_nodes_to_keep
     kmeans = KMeans(n_clusters=num_centroids, init='k-means++', random_state=1)
-    kmeans.fit(list_of_embeddings)
-    y_kmeans = kmeans.predict(list_of_embeddings)
+    kmeans.fit(elements)
+    y_kmeans = kmeans.predict(elements)
     centers = kmeans.cluster_centers_
     return node_coords, kmeans, y_kmeans, centers
 

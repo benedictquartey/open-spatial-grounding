@@ -12,10 +12,11 @@ from torchvision.ops import box_convert
 from segment_anything import build_sam, SamPredictor
 from mobile_sam import sam_model_registry, SamPredictor
 from transformers import OwlViTProcessor, OwlViTForObjectDetection, Owlv2Processor, Owlv2ForObjectDetection
-from osg.utils.record3d_utils import get_xyz_coordinate
+
 
 from osg.spatial_relationships import check_spatial_predicate_satisfaction
-from osg.utils.general_utils import get_center_pixel_depth, get_mask_pixels_depth, get_bounding_box_center_depth, get_bounding_box_pixels_depth, spot_pixel_to_world_frame
+from osg.utils.pointcloud_utils import get_xyz_coordinate, spot_pixel_to_world_frame
+from osg.utils.general_utils import get_center_pixel_depth, get_mask_pixels_depth, get_bounding_box_center_depth, get_bounding_box_pixels_depth 
 
 # import warnings
 # warnings.filterwarnings("ignore")
