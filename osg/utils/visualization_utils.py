@@ -51,6 +51,77 @@ def visualize(pcd,items,h_min_bottom, h_max_top,filter_top_bottom=False):
     
     return pcd, items
 
+
+def place_waypoints_in_scene(waypoints):
+    total_axes = []
+    for waypoint_key in waypoints:
+        rotation_matrix = waypoints[waypoint_key]['rotation_matrix']
+        position = waypoints[waypoint_key]['position']
+
+        mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.6, origin=[0, 0, 0])
+        mesh_frame = mesh_frame.rotate(rotation_matrix, center=(0, 0, 0)).translate(position)
+        total_axes.append(mesh_frame)
+    return total_axes
+
+
+def place_plan_in_scene(saved_plan):
+    global COLORS
+    world_plan = saved_plan['world_plan']
+    
+    # Select colors from the COLORS dictionary
+    color_names = list(COLORS.keys())
+    
+    lines = []
+    spheres = []
+    color_index = 0
+
+    # Create a sphere at the start coordinate of the first step
+    first_step_start_point = world_plan[list(world_plan.keys())[0]]['path'][0]
+    start_sphere = create_sphere_at_point(first_step_start_point, COLORS['Red'], 0.15)
+    spheres.append(start_sphere)
+
+    # Process each step in world_plan
+    last_navigation_step = None
+    for step_name, step_data in world_plan.items():
+
+        if step_data['action']=='navigation':
+            path = step_data['path']
+            color_name = color_names[color_index % len(color_names)]
+            color = COLORS[color_name]
+            line_set = create_line_set_from_path(path, color)
+            lines.append(line_set)
+
+            # Create a sphere at the end of each step
+            end_point = path[-1]
+            sphere = create_sphere_at_point(end_point, COLORS['Gold'], 0.1)  # using yellow for intermediary steps
+            spheres.append(sphere)
+            color_index += 1
+            last_navigation_step = step_name
+
+    # Create a special green sphere at the last coordinate of the last step
+    last_step_end_point = world_plan[last_navigation_step]['path'][-1]
+    final_sphere = create_sphere_at_point(last_step_end_point, COLORS['Green'], 0.15)  # using a larger size for the final step
+    spheres.append(final_sphere)
+
+    return lines + spheres
+
+
+def create_line_set_from_path(path, color):
+    points = o3d.utility.Vector3dVector(np.hstack((path, np.zeros((len(path), 1)))))  # Add z=0 for 3D coordinates
+    lines = [[i, i+1] for i in range(len(path)-1)]
+    line_set = o3d.geometry.LineSet()
+    line_set.points = points
+    line_set.lines = o3d.utility.Vector2iVector(lines)
+    line_set.paint_uniform_color(color)
+    return line_set
+
+def create_sphere_at_point(point, color, radius):
+    sphere = o3d.geometry.TriangleMesh.create_sphere(radius=radius)
+    sphere.translate(np.array([point[0], point[1], 0]))  # Translating the sphere to the 2D point (with z=0)
+    sphere.paint_uniform_color(color)
+    return sphere
+
+
 # Function to create a top-down 2D view of the point cloud
 def plot_top_down_view(point_cloud, z_threshold):
     # Convert point cloud to numpy array

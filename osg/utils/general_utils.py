@@ -317,7 +317,7 @@ def load_robot_data(data_path,tmp_fldr, pcd_downsample=False, compression_percen
 
     #get corresponding images for each pose
     for id, waypoint_name in enumerate(poses.keys()):
-        print(f"{id} out of {len(poses.keys())} || Getting cardinal images for waypoint:{waypoint_name}")
+        # print(f"{id} out of {len(poses.keys())} || Getting cardinal images for waypoint:{waypoint_name}")
         image_collection={}
         image_tensor_collection={}
         depth_collection={}
