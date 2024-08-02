@@ -1,5 +1,5 @@
-import numpy as np
 import re
+import numpy as np
 from osg.utils.general_utils import parse_spatial_relations
 
 def get_arguments_from_spatial_constraint(spatial_constraint):

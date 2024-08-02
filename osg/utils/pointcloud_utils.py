@@ -1,16 +1,15 @@
 import tqdm
 import torch
-import open3d as o3d
-import more_itertools
-from torch import Tensor
-from typing import Iterator,NamedTuple
-import matplotlib.pyplot as plt
-from torch.utils.data.dataset import Dataset
-from os import path, makedirs, listdir
-from osg.utils.dataset_class import PosedRGBDItem,R3DDataset
-import networkx as nx
-from tqdm import tqdm
 import numpy as np
+import open3d as o3d
+from tqdm import tqdm
+import more_itertools
+import networkx as nx
+from torch import Tensor
+from typing import Iterator
+from torch.utils.data.dataset import Dataset
+from osg.utils.dataset_class import PosedRGBDItem,R3DDataset
+
 
 def spot_pixel_to_world_frame_batched(depth: Tensor, pose: Tensor) -> Tensor:
     """

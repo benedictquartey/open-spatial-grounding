@@ -8,7 +8,7 @@ setup(
     version="0.1.0",
     author="Benedict Quartey",
     author_email="benedict_quartey@brown.edu",
-    description="Out of the box package for grounding open vocabulary objects with spatial constraints and generating Task Progression Semantic Maps.",
+    description="Out of the box package for grounding open vocabulary objects with spatial constraints",
     long_description=open('README.md').read(),
     long_description_content_type="text/markdown",
     url="https://github.com/benedictquartey/open-spatial-grounding",

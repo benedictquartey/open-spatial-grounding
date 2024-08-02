@@ -1,11 +1,9 @@
-import random
 import os
+import random
 import numpy as np
-import pandas as pd
+import networkx as nx
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
-import networkx as nx
-import torch
 
 def save_and_show_plot(fig, filename, visualize, tmp_fldr):
     if not os.path.exists(tmp_fldr):

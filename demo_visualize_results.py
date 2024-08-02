@@ -42,7 +42,7 @@ if __name__ == "__main__":
         plot_top_down_view(pcd, z_threshold=0.5)
     else:                                           ## Visualize Point Cloud in 3D
         h_min_bottom= -3
-        h_max_top= 1 #1.5 keep more of height default || see doors: 0.7 || Old value:-0.15
+        h_max_top= 1                                ## 1.5 keep more of height default || see doors: 0.7 || Old value:-0.15
         if args.remove_roof:
             vis_pcd, extra_items = visualize(pcd, items_to_visualize, h_min_bottom, h_max_top, filter_top_bottom=True)
         else:

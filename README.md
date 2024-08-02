@@ -11,16 +11,13 @@ Out of the box open source package for grounding open vocabulary objects with sp
   * Segment Anything: ```pip install git+https://github.com/facebookresearch/segment-anything.git```
 * Get SAM or Mobile Sam model checkpoints and place it in the [model_ckpts](osg/model_ckpts/) folder
 
-## Record 3D Data
-* Install PolyCam
-* Enable Developer Mode
-* Use Lidar mode to capture about 30 images of scene, 
-  * You can process on device but for better performance and in more complex scenes choose cloud processing.
-* Export raw capture data to your computer
-* Run ```python``` to convert data
+## Scan Environment
+* This codebase supports directly using RGBD data from robot exploration however the easiest way to get started is using an Iphone Pro equiped with lidar sensors.
+* Download the [Record3D app](https://record3d.app), scan the scene of your choice and export the *.r3d file to your computer.
+  - Make sure to capture all test objects in your recording.
+  - You can download a sample r3d file here: [drive](https://)
 
 ## Running Instructions
-* Grab sample data from [drive](https://)
 * Walkthrough the [demo notebook](demo_notebook.ipynb)
 * Run the [demo_visualize_results.py](demo_visualize_results.py) to visualize results
   * To visualize grounded detections after spatial grounding run :\

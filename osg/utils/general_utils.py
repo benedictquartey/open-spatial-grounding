@@ -1,21 +1,16 @@
-import numpy as np
-import open3d as o3d
+import torch
 import pickle
-from PIL import Image
-from os import path, makedirs
-import networkx as nx
 import random
 import string
-from osg.utils.pointcloud_utils import get_posed_rgbd_dataset, get_pointcloud_from_graph_r3d, get_pointcloud_from_graph_robot
-from osg.utils.map_compression_utils import compress_observation_graph
-from torchvision.transforms import ToPILImage
+import numpy as np
+import open3d as o3d
+from PIL import Image
+import networkx as nx
+from os import path, makedirs
 import matplotlib.pyplot as plt
-import torch
-import cv2
-import tqdm
-import torch
-from torch import Tensor
-
+from torchvision.transforms import ToPILImage
+from osg.utils.map_compression_utils import compress_observation_graph
+from osg.utils.pointcloud_utils import get_posed_rgbd_dataset, get_pointcloud_from_graph_r3d, get_pointcloud_from_graph_robot
 
 
 #function to generate random numeric alphanumeric string
@@ -174,7 +169,7 @@ def decompose_pose_single(homogeneous_pose_matrix):
     rotation = homogeneous_pose_matrix[:3, :3]
     return position, rotation
 
-def load_data(data_path, data_src, tmp_fldr, pcd_downsample, compression_percentage, compression_technique=None):
+def load_data(data_path, data_src, tmp_fldr, pcd_downsample, compression_percentage, compression_technique="position_direction"):
     if data_src == "robot":
         return load_robot_data(data_path, tmp_fldr, pcd_downsample, compression_percentage, compression_technique)
     elif data_src == "r3d":
@@ -462,53 +457,3 @@ def draw_observations_graph(observations_graph, node_coords, plt_size=(20,20),ax
         ax.tick_params(left=True, bottom=True, labelleft=True, labelbottom=True)
         plt.axis("on")
         plt.show()
-
-
-def make_pointcloud(graph: nx.Graph, chunk_size: int = 16, threshold: float = 0.9, downsample=False) -> o3d.geometry.PointCloud:
-	fill_in = False #if fill_in is True, then gaps in depth image are filled in with black (at maximal distance..?)
-	save_pc = True #if true, save point cloud to same location as dir_path+dir_name
-
-	pose_dir = pickle.load(open(f"{data_path}{pose_data_fname}","rb"))
-
-	#######################################
-	# Visualize point cloud
-
-	print("Number of files: ", len(file_names), "number of ids", len(file_ids))
-	total_pcds = []
-	total_colors = []
-	total_axes = []
-	for idx,node in enumerate(graph.nodes):
-
-		color_img = graph.nodes[node]['rgb']
-		color_img = color_img[:,:,::-1]  # RGB-> BGR
-		depth_img = pickle.load(open(f"{data_path}depth_{str(file_num)}","rb"))#cv2.imread(dir_path+dir_name+"depth_"+str(file_num)+".jpg")
-
-		H,W = depth_img.shape
-		for i in range(H):
-			for j in range(W):
-				#first apply rot2 to move camera into hand frame, then apply rotation + transform of hand frame in vision frame
-				transformed_xyz,_ = spot_pixel_to_world_frame(i,j,depth_img,rotation_matrix,position)
-
-				total_pcds.append(transformed_xyz)
-
-				# Add the color of the pixel if it exists:
-				if 0 <= j < W and 0 <= i < H:
-					total_colors.append(color_img[i,j] / 255)
-				elif fill_in:
-					total_colors.append([0., 0., 0.])
-
-		mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.6,origin=[0,0,0])
-		mesh_frame = mesh_frame.rotate(rotation_matrix, center=(0, 0, 0)).translate(position)
-		#mesh_frame.paint_uniform_color([float(file_num)/num_files, 0.1, 1-(float(file_num)/num_files)])
-
-		total_axes.append(mesh_frame)
-		
-	pcd_o3d = o3d.geometry.PointCloud()  # create a point cloud object
-	pcd_o3d.points = o3d.utility.Vector3dVector(total_pcds)
-	pcd_o3d.colors = o3d.utility.Vector3dVector(total_colors)
-
-	#bb = o3d.geometry.OrientedBoundingBox(center=np.array([0,0,0]),R=rot2_mat,extent=np.array([1,1,1]))
-
-
-
-	return(pcd_o3d)

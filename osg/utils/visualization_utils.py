@@ -1,5 +1,5 @@
-import open3d as o3d
 import numpy as np
+import open3d as o3d
 import matplotlib.pyplot as plt
 from osg.utils.pointcloud_utils import get_xyz_coordinate, spot_pixel_to_world_frame
 

@@ -13,13 +13,11 @@ from segment_anything import build_sam, SamPredictor
 from mobile_sam import sam_model_registry, SamPredictor
 from transformers import OwlViTProcessor, OwlViTForObjectDetection, Owlv2Processor, Owlv2ForObjectDetection
 
-
 from osg.spatial_relationships import check_spatial_predicate_satisfaction
 from osg.utils.pointcloud_utils import get_xyz_coordinate, spot_pixel_to_world_frame
 from osg.utils.general_utils import get_center_pixel_depth, get_mask_pixels_depth, get_bounding_box_center_depth, get_bounding_box_pixels_depth 
 
-# import warnings
-# warnings.filterwarnings("ignore")
+
 class vlm_library():
      def __init__(self, vl_model, data_src="robot", seg_model="sam",tmp_fldr="./tmp"):
           self.data_sources = ["robot","r3d"]
