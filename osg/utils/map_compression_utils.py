@@ -5,11 +5,12 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 
-def save_and_show_plot(fig, filename, visualize, tmp_fldr):
+def save_and_show_plot(fig, filename, visualize, tmp_fldr, save_plots=False):
     if not os.path.exists(tmp_fldr):
         os.makedirs(tmp_fldr)
     filepath = os.path.join(tmp_fldr, filename)
-    fig.savefig(filepath)
+    if save_plots:
+        fig.savefig(filepath)
     if visualize:
         plt.show()
     else:
