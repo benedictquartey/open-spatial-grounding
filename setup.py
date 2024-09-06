@@ -21,20 +21,20 @@ setup(
     python_requires='>=3.8',
     install_requires=[
         # Add your project's dependencies here
-        "numpy"
-        "open3d"
-        "networkx "
-        "pillow"
-        "matplotlib"
-        "transformers"
-        "torch"
-        "torchvision"
-        "tqdm"
-        "ipykernel"
-        "timm==0.9.10"
-        "fire"
-        "more_itertools"
-        "opencv-python==4.9.0.80"
+        "numpy",
+        "open3d",
+        "networkx",
+        "pillow",
+        "matplotlib",
+        "transformers",
+        "torch",
+        "torchvision",
+        "tqdm",
+        "ipykernel",
+        "timm==0.9.10",
+        "fire",
+        "more_itertools",
+        "opencv-python==4.9.0.80",
         "pyliblzfse"
     ],
 )
