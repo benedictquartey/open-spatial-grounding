@@ -31,6 +31,10 @@ setup(
         "torchvision"
         "tqdm"
         "ipykernel"
-        "timm"
+        "timm==0.9.10"
+        "fire"
+        "more_itertools"
+        "opencv-python==4.9.0.80"
+        "pyliblzfse"
     ],
 )
